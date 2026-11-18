@@ -3,6 +3,9 @@
 venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -17,3 +20,7 @@ results/figures/*
 !results/figures/.gitkeep
 results/tables/*
 !results/tables/.gitkeep
+
+# Local raw case-study data and downloaded road graphs (review before publishing)
+data/raw/*
+!data/raw/README.md

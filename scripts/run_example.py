@@ -41,7 +41,7 @@ def main() -> None:
     )
     print(f"\nCapital budget used: {capital_cost:,.2f} / {problem.budget:,.2f}")
     print("\nAll model feasibility checks passed.")
-    print("This baseline uses SciPy/HiGHS; custom algorithms are future work.")
+    print("This MILP baseline uses SciPy/HiGHS; custom LP/GMI algorithms are available in separate scripts.")
 
 
 if __name__ == "__main__":

@@ -25,7 +25,13 @@ LPStatus = Literal["optimal", "infeasible", "unbounded", "iteration_limit"]
 
 @dataclass(frozen=True)
 class LPResult:
-    """Result of solving a linear program."""
+    """Result of solving a linear program.
+
+    ``x`` contains the original decision variables. The ``standard_*`` fields
+    retain the equality-form LP (including slack/surplus columns) so that
+    cutting-plane and dual-simplex routines can safely re-optimize it.
+    ``standard_solution`` contains all original and auxiliary variables.
+    """
 
     status: LPStatus
     objective_value: float | None
@@ -35,6 +41,11 @@ class LPResult:
     basis: tuple[int, ...] = ()
     dual_prices: FloatArray | None = None
     reduced_costs: FloatArray | None = None
+    standard_matrix: FloatArray | None = None
+    standard_rhs: FloatArray | None = None
+    standard_cost: FloatArray | None = None
+    standard_solution: FloatArray | None = None
+    original_variable_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -401,4 +412,138 @@ def solve_lp(
         basis=phase2.basis,
         dual_prices=phase2.dual_prices,
         reduced_costs=phase2.reduced_costs[:n] if phase2.reduced_costs is not None else None,
+        standard_matrix=A_phase2.copy(),
+        standard_rhs=b_work.copy(),
+        standard_cost=c_phase2.copy(),
+        standard_solution=phase2.x.copy(),
+        original_variable_count=n,
+    )
+
+
+def dual_simplex_reoptimize(
+    A: NDArray[np.float64],
+    b: NDArray[np.float64],
+    c: NDArray[np.float64],
+    initial_basis: list[int] | tuple[int, ...],
+    *,
+    original_variable_count: int | None = None,
+    tolerance: float = 1e-9,
+    max_iterations: int = 10_000,
+) -> LPResult:
+    """Re-optimize an equality-form minimization LP using Dual Simplex.
+
+    The supplied basis must be dual feasible (all nonbasic reduced costs are
+    nonnegative within tolerance), but its basic solution may be primal
+    infeasible. This is the state created when a valid Gomory cut is appended
+    to an already optimal LP basis with its new slack variable basic.
+
+    All variables are assumed nonnegative. The returned ``x`` contains the
+    first ``original_variable_count`` variables; ``standard_solution``
+    contains all columns, including auxiliary slack/surplus variables.
+    """
+    A_array = np.asarray(A, dtype=float)
+    b_array = np.asarray(b, dtype=float)
+    c_array = np.asarray(c, dtype=float)
+    if A_array.ndim != 2:
+        raise ValueError("A must be a two-dimensional matrix.")
+    m, n = A_array.shape
+    if b_array.shape != (m,) or c_array.shape != (n,):
+        raise ValueError("Dimensions of A, b, and c are inconsistent.")
+    if m == 0 or len(initial_basis) != m:
+        raise ValueError("The basis must contain one column per constraint row.")
+    if len(set(initial_basis)) != len(initial_basis):
+        raise ValueError("The initial basis cannot contain duplicate columns.")
+    if any(index < 0 or index >= n for index in initial_basis):
+        raise ValueError("An initial basis column index is out of range.")
+    if not (np.all(np.isfinite(A_array)) and np.all(np.isfinite(b_array)) and np.all(np.isfinite(c_array))):
+        raise ValueError("A, b, and c must contain finite values.")
+    if max_iterations <= 0:
+        raise ValueError("max_iterations must be positive.")
+
+    original_count = n if original_variable_count is None else int(original_variable_count)
+    if not 0 <= original_count <= n:
+        raise ValueError("original_variable_count must be between zero and the column count.")
+
+    basis = list(initial_basis)
+    for iteration in range(max_iterations + 1):
+        B = A_array[:, basis]
+        try:
+            x_basic = np.linalg.solve(B, b_array)
+            dual = np.linalg.solve(B.T, c_array[basis])
+            tableau = np.linalg.solve(B, A_array)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("The current basis matrix is singular.") from exc
+
+        reduced = c_array - A_array.T @ dual
+        nonbasic = [j for j in range(n) if j not in basis]
+        if any(reduced[j] < -tolerance for j in nonbasic):
+            raise ValueError(
+                "The supplied basis is not dual feasible; Dual Simplex cannot start."
+            )
+
+        infeasible_rows = [r for r in range(m) if x_basic[r] < -tolerance]
+        if not infeasible_rows:
+            full_solution = np.zeros(n, dtype=float)
+            full_solution[basis] = np.maximum(x_basic, 0.0)
+            return LPResult(
+                status="optimal",
+                objective_value=float(c_array @ full_solution),
+                x=full_solution[:original_count].copy(),
+                iterations=iteration,
+                message="Optimal solution restored by Dual Simplex.",
+                basis=tuple(basis),
+                dual_prices=dual.copy(),
+                reduced_costs=reduced.copy(),
+                standard_matrix=A_array.copy(),
+                standard_rhs=b_array.copy(),
+                standard_cost=c_array.copy(),
+                standard_solution=full_solution,
+                original_variable_count=original_count,
+            )
+
+        if iteration == max_iterations:
+            break
+
+        # Select the most primal-infeasible basic row; Bland tie-breaks ties.
+        minimum_value = min(x_basic[r] for r in infeasible_rows)
+        tied_rows = [r for r in infeasible_rows if x_basic[r] <= minimum_value + tolerance]
+        leaving_row = min(tied_rows, key=lambda r: basis[r])
+
+        candidates = [j for j in nonbasic if tableau[leaving_row, j] < -tolerance]
+        if not candidates:
+            return LPResult(
+                status="infeasible",
+                objective_value=None,
+                x=None,
+                iterations=iteration,
+                message=(
+                    "The dual-feasible basis has a negative basic value and no "
+                    "eligible entering variable; the augmented LP is infeasible."
+                ),
+                basis=tuple(basis),
+                dual_prices=dual.copy(),
+                reduced_costs=reduced.copy(),
+                standard_matrix=A_array.copy(),
+                standard_rhs=b_array.copy(),
+                standard_cost=c_array.copy(),
+                original_variable_count=original_count,
+            )
+
+        ratios = {j: reduced[j] / (-tableau[leaving_row, j]) for j in candidates}
+        minimum_ratio = min(ratios.values())
+        tied_columns = [j for j in candidates if ratios[j] <= minimum_ratio + tolerance]
+        entering = min(tied_columns)
+        basis[leaving_row] = entering
+
+    return LPResult(
+        status="iteration_limit",
+        objective_value=None,
+        x=None,
+        iterations=max_iterations,
+        message=f"Dual Simplex reached the iteration limit ({max_iterations}).",
+        basis=tuple(basis),
+        standard_matrix=A_array.copy(),
+        standard_rhs=b_array.copy(),
+        standard_cost=c_array.copy(),
+        original_variable_count=original_count,
     )

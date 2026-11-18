@@ -1,0 +1,5 @@
+road_id,count_station,chainage_km,year,light_vehicles_per_day,trucks_per_day,truck_trailers_per_day,total_vehicles_per_day,source,notes
+M1,ATC_M1_20_7,20.7,2017,18011,541,83,18635,ADB North-South Corridor Tranche 1 Completion Report,Historical automatic count; not a current 2026 value
+M2,ATC_M2_9_38,9.38,2018,34846,2714,271,37831,ADB North-South Corridor Tranche 1 Completion Report,Historical automatic count; report says representative only near the Yerevan end
+M1,ATC_M1_20_7,20.7,2012,13863,2555,360,16778,ADB North-South Corridor Tranche 1 Completion Report,Historical automatic count
+M2,ATC_M2_9_38,9.38,2012,26546,4674,466,31686,ADB North-South Corridor Tranche 1 Completion Report,Historical automatic count
