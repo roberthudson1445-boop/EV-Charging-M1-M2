@@ -29,6 +29,9 @@ REQUIRED_CONFIG_KEYS = {
     "budget",
     "distance_weight",
 }
+SUPPORTED_DISTANCE_DIRECTION = "demand_to_site"
+OPTIONAL_ROUTE_SITE_COLUMNS = {"route_id", "chainage_km"}
+OPTIONAL_ROUTE_CONFIG_KEYS = {"route_lengths_km", "max_interstation_distance_km"}
 
 
 def _read_csv(path: Path, required_columns: set[str]) -> list[dict[str, str]]:
@@ -70,8 +73,20 @@ def load_problem_from_csv(data_directory: str | Path) -> ProblemData:
       - config.json: charger capacity, service distance, charger power,
         budget, and distance weight
 
+    For the directed Armenia corridor case, config.json should also declare
+    distance_direction='demand_to_site'. The distance value is then the
+    one-way OSM shortest-path road distance from the demand point to the
+    candidate charging site. Older example inputs without this key remain
+    supported for backwards compatibility.
+
     Optional latitude/longitude/source columns may be kept in the CSV files
     for mapping and provenance; this loader leaves them untouched.
+
+    To enable corridor spacing, add ``route_id`` and ``chainage_km`` to
+    ``sites.csv`` and add ``route_lengths_km`` plus
+    ``max_interstation_distance_km`` to ``config.json``. All four fields are
+    required together; the interstation threshold is independent of the
+    demand-service distance threshold.
     """
     directory = Path(data_directory)
     site_rows = _read_csv(directory / "sites.csv", REQUIRED_SITE_COLUMNS)
@@ -85,9 +100,30 @@ def load_problem_from_csv(data_directory: str | Path) -> ProblemData:
         config: Any = json.load(stream)
     if not isinstance(config, dict):
         raise ValueError("config.json must contain a JSON object.")
+    configured_direction = config.get("distance_direction")
+    if configured_direction is not None and configured_direction != SUPPORTED_DISTANCE_DIRECTION:
+        raise ValueError(
+            "This model input loader expects distance_direction='demand_to_site' "
+            f"when the field is present; got {configured_direction!r}."
+        )
     missing_config = REQUIRED_CONFIG_KEYS - set(config)
     if missing_config:
         raise ValueError(f"config.json is missing keys: {sorted(missing_config)}")
+
+    site_columns = set(site_rows[0])
+    route_site_fields_present = OPTIONAL_ROUTE_SITE_COLUMNS & site_columns
+    route_config_fields_present = OPTIONAL_ROUTE_CONFIG_KEYS & set(config)
+    route_metadata_enabled = (
+        route_site_fields_present == OPTIONAL_ROUTE_SITE_COLUMNS
+        and route_config_fields_present == OPTIONAL_ROUTE_CONFIG_KEYS
+    )
+    if route_site_fields_present or route_config_fields_present:
+        if not route_metadata_enabled:
+            raise ValueError(
+                "Interstation spacing requires both sites.csv columns "
+                "'route_id'/'chainage_km' and config.json keys "
+                "'route_lengths_km'/'max_interstation_distance_km'."
+            )
 
     site_names = tuple(row["site_id"].strip() for row in site_rows)
     demand_names = tuple(row["demand_id"].strip() for row in demand_rows)
@@ -148,6 +184,31 @@ def load_problem_from_csv(data_directory: str | Path) -> ProblemData:
             raise ValueError(f"config.json key '{key}' must be finite.")
         return value
 
+    route_kwargs: dict[str, Any] = {}
+    if route_metadata_enabled:
+        site_route_ids = tuple(row["route_id"].strip() for row in site_rows)
+        site_chainage_km = np.array(
+            [_number(row, "chainage_km", "sites.csv") for row in site_rows],
+            dtype=float,
+        )
+        raw_route_lengths = config["route_lengths_km"]
+        if not isinstance(raw_route_lengths, dict):
+            raise ValueError("config.json route_lengths_km must be a JSON object.")
+        route_lengths_km: dict[str, float] = {}
+        for route_id, raw_length in raw_route_lengths.items():
+            try:
+                route_lengths_km[str(route_id)] = float(raw_length)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"config.json route length for {route_id!r} must be numeric."
+                ) from exc
+        route_kwargs = {
+            "site_route_ids": site_route_ids,
+            "site_chainage_km": site_chainage_km,
+            "route_lengths_km": route_lengths_km,
+            "max_interstation_distance_km": config_number("max_interstation_distance_km"),
+        }
+
     problem = ProblemData(
         site_names=site_names,
         demand_names=demand_names,
@@ -176,6 +237,7 @@ def load_problem_from_csv(data_directory: str | Path) -> ProblemData:
             [_number(row, "power_cost_weight", "sites.csv") for row in site_rows],
             dtype=float,
         ),
+        **route_kwargs,
     )
     problem.validate()
     return problem

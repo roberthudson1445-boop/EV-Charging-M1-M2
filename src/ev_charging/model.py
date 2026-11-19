@@ -26,6 +26,9 @@ class OptimizationResult:
     objective_breakdown: dict[str, float]
     solver_status: int
     solver_message: str
+    mip_gap: float | None = None
+    mip_node_count: int | None = None
+    mip_dual_bound: float | None = None
 
 
 def _indices(n: int, m: int) -> tuple[int, int, int, int]:
@@ -41,12 +44,31 @@ def _x_index(x_start: int, m: int, i: int, j: int) -> int:
     return x_start + i * m + j
 
 
-def solve_milp(problem: ProblemData) -> OptimizationResult:
+def solve_milp(
+    problem: ProblemData,
+    *,
+    mip_rel_gap: float = 0.0,
+    time_limit_seconds: float | None = None,
+) -> OptimizationResult:
     """Solve the MILP using SciPy/HiGHS.
+
+    ``mip_rel_gap`` is the requested relative MIP optimality gap. The default
+    0.0 preserves an exact-optimality request. For larger screening cases, a
+    small positive gap can reduce solve time; the actual achieved gap is
+    returned in ``OptimizationResult.mip_gap``. ``time_limit_seconds`` is an
+    optional wall-clock limit. A run that stops without HiGHS status 0 is
+    reported as a failure rather than being mislabeled as optimal.
 
     This is the project baseline/benchmark solver. It is not the planned
     from-scratch Revised Simplex + Gomory + Dual Simplex implementation.
     """
+    if not np.isfinite(mip_rel_gap) or mip_rel_gap < 0:
+        raise ValueError("mip_rel_gap must be finite and non-negative.")
+    if time_limit_seconds is not None and (
+        not np.isfinite(time_limit_seconds) or time_limit_seconds <= 0
+    ):
+        raise ValueError("time_limit_seconds must be finite and greater than zero.")
+
     problem.validate()
     n = len(problem.site_names)
     m = len(problem.demand_names)
@@ -136,12 +158,15 @@ def solve_milp(problem: ProblemData) -> OptimizationResult:
         add_row(entries, -np.inf, 0.0)
 
     # 5) Physical site sizing: z_i - K_i*y_i <= 0.
+    # An opened station must contain at least one charger: y_i - z_i <= 0.
+    # This prevents a zero-charger site from satisfying corridor spacing.
     for i in range(n):
         entries = [
             (z_start + i, 1.0),
             (y_start + i, -float(problem.max_chargers[i])),
         ]
         add_row(entries, -np.inf, 0.0)
+        add_row([(y_start + i, 1.0), (z_start + i, -1.0)], -np.inf, 0.0)
 
     # 6a) Charger count to active power: P_i - gamma*z_i = 0.
     for i in range(n):
@@ -170,16 +195,32 @@ def solve_milp(problem: ProblemData) -> OptimizationResult:
         )
     add_row(budget_entries, -np.inf, problem.budget)
 
+    # 8) Maximum distance between consecutive open stations on each corridor.
+    # Route endpoints are fixed boundaries; only station-open variables appear.
+    for gap_entries, rhs in problem.interstation_gap_rows():
+        add_row(
+            [(y_start + site_index, coefficient) for site_index, coefficient in gap_entries],
+            -np.inf,
+            rhs,
+        )
+
     matrix = coo_matrix(
         (values, (row_indices, col_indices)), shape=(row, num_vars)
     ).tocsr()
+
+    solver_options: dict[str, float | bool] = {
+        "disp": False,
+        "mip_rel_gap": float(mip_rel_gap),
+    }
+    if time_limit_seconds is not None:
+        solver_options["time_limit"] = float(time_limit_seconds)
 
     result = milp(
         c=objective,
         integrality=integrality,
         bounds=Bounds(lower_bounds, upper_bounds),
         constraints=LinearConstraint(matrix, np.array(row_lower), np.array(row_upper)),
-        options={"disp": False},
+        options=solver_options,
     )
 
     if result.x is None or result.status != 0:
@@ -219,6 +260,9 @@ def solve_milp(problem: ProblemData) -> OptimizationResult:
         objective_breakdown=breakdown,
         solver_status=int(result.status),
         solver_message=str(result.message),
+        mip_gap=(float(result.mip_gap) if getattr(result, "mip_gap", None) is not None else None),
+        mip_node_count=(int(result.mip_node_count) if getattr(result, "mip_node_count", None) is not None else None),
+        mip_dual_bound=(float(result.mip_dual_bound) if getattr(result, "mip_dual_bound", None) is not None else None),
     )
     validate_solution(problem, solution)
     return solution
@@ -237,6 +281,7 @@ def validate_solution(
     assert np.all(np.isin(solution.opened, [0, 1]))
     assert np.all(solution.chargers >= 0)
     assert np.all(solution.chargers <= problem.max_chargers)
+    assert np.all(solution.chargers + tolerance >= solution.opened)
     assert np.all(solution.assignment >= -tolerance)
 
     # Full demand assignment.
@@ -263,6 +308,11 @@ def validate_solution(
         atol=tolerance,
     )
     assert np.all(solution.power_kw <= problem.grid_capacity_kw * solution.opened + tolerance)
+
+    # Maximum route gap, including the start and end of each corridor.
+    for gap_entries, rhs in problem.interstation_gap_rows():
+        lhs = sum(coefficient * solution.opened[index] for index, coefficient in gap_entries)
+        assert lhs <= rhs + tolerance
 
     # Capital budget.
     capital_cost = float(

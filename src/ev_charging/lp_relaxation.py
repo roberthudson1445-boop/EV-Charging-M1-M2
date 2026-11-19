@@ -99,11 +99,18 @@ def solve_ev_lp_relaxation(problem: ProblemData) -> EVLPRelaxationResult:
         ub_rows.append(row)
         ub_rhs.append(0.0)
 
-    # Site sizing: z_i - K_i*y_i <= 0.
+    # Site sizing: z_i - K_i*y_i <= 0, and each open station has at least
+    # one charger: y_i - z_i <= 0.
     for i in range(n):
         row = np.zeros(number_of_variables)
         row[z0 + i] = 1.0
         row[y0 + i] = -float(problem.max_chargers[i])
+        ub_rows.append(row)
+        ub_rhs.append(0.0)
+
+        row = np.zeros(number_of_variables)
+        row[y0 + i] = 1.0
+        row[z0 + i] = -1.0
         ub_rows.append(row)
         ub_rhs.append(0.0)
 
@@ -128,6 +135,14 @@ def solve_ev_lp_relaxation(problem: ProblemData) -> EVLPRelaxationResult:
         row[z0 + i] = problem.charger_cost[i]
     ub_rows.append(row)
     ub_rhs.append(problem.budget)
+
+    # Maximum route gap. The same pairwise rows are used in the MILP and LP.
+    for gap_entries, rhs in problem.interstation_gap_rows():
+        row = np.zeros(number_of_variables)
+        for site_index, coefficient in gap_entries:
+            row[y0 + site_index] += coefficient
+        ub_rows.append(row)
+        ub_rhs.append(rhs)
 
     # Relaxed binary bound 0 <= y_i <= 1.
     for i in range(n):

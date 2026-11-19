@@ -24,3 +24,8 @@ results/tables/*
 # Local raw case-study data and downloaded road graphs (review before publishing)
 data/raw/*
 !data/raw/README.md
+
+# Generated local caches and derived data
+cache/
+data/derived/
+*.bak
