@@ -1,0 +1,4 @@
+﻿case_id,route_id,site_id,demand_id,distance_proxy_km,directed_driving_distance_km,distance_direction,assignment_fraction,assigned_energy_kwh_day
+demand_low__charger_cost_base,M1,M1_C004,M1_ATC_ATC_M1_20_7,9.243139920791489,9.243139920791489,demand_to_site,1.0,450.27500000000003
+demand_low__charger_cost_base,M2,M2_C007,M2_ATC_ATC_M2_9_38,50.32616912425672,50.32616912425672,demand_to_site,1.0,871.1500000000001
+demand_low__charger_cost_base,M2,M2_C007,M2_ADB_SECTION_13_1_28_9,43.698389702341686,43.698389702341686,demand_to_site,1.0,559.593888516131

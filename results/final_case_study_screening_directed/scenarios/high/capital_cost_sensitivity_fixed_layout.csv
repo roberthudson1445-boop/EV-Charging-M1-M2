@@ -1,0 +1,4 @@
+﻿case_id,demand_scenario,optimized_layout_cost_basis,revalued_charger_cost_scenario,opened_station_count_fixed_layout,charger_count_fixed_layout,site_fixed_cost_usd,charger_hardware_and_installation_cost_usd,total_capital_cost_proxy_usd,interpretation
+demand_high__charger_cost_base,high,base,low,12,49,1236000.0,5497800.0,6733800.0,Post-optimization revaluation of the same selected layout; alternate costs are NOT re-optimized.
+demand_high__charger_cost_base,high,base,base,12,49,1236000.0,7555800.0,8791800.0,Post-optimization revaluation of the same selected layout; alternate costs are NOT re-optimized.
+demand_high__charger_cost_base,high,base,high,12,49,1236000.0,9613800.0,10849800.0,Post-optimization revaluation of the same selected layout; alternate costs are NOT re-optimized.

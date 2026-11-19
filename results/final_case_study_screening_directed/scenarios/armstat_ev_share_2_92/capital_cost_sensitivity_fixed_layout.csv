@@ -1,0 +1,4 @@
+﻿case_id,demand_scenario,optimized_layout_cost_basis,revalued_charger_cost_scenario,opened_station_count_fixed_layout,charger_count_fixed_layout,site_fixed_cost_usd,charger_hardware_and_installation_cost_usd,total_capital_cost_proxy_usd,interpretation
+demand_armstat_ev_share_2_92__charger_cost_base,armstat_ev_share_2_92,base,low,7,17,721000.0,1907400.0,2628400.0,Post-optimization revaluation of the same selected layout; alternate costs are NOT re-optimized.
+demand_armstat_ev_share_2_92__charger_cost_base,armstat_ev_share_2_92,base,base,7,17,721000.0,2621400.0,3342400.0,Post-optimization revaluation of the same selected layout; alternate costs are NOT re-optimized.
+demand_armstat_ev_share_2_92__charger_cost_base,armstat_ev_share_2_92,base,high,7,17,721000.0,3335400.0,4056400.0,Post-optimization revaluation of the same selected layout; alternate costs are NOT re-optimized.

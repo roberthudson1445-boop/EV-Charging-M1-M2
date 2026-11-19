@@ -1,0 +1,5 @@
+﻿scenario,legacy_selected_stations,directed_selected_stations,retained_sites,legacy_only_sites_removed,directed_only_sites_added,legacy_chargers,directed_chargers,delta_chargers,legacy_assigned_energy_kwh_day,directed_assigned_energy_kwh_day
+low,6,6,5,1,1,7,7,0,1881.0188885161272,1881.018888516131
+base,7,7,7,0,0,16,15,-1,10888.90341935383,10888.903419350769
+high,13,12,12,1,0,50,49,-1,45593.10565399168,45593.10565399006
+armstat_ev_share_2_92,7,7,7,0,0,18,17,-1,12734.365352196812,12734.365352196804
