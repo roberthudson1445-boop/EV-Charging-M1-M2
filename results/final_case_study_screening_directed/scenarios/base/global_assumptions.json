@@ -1,0 +1,31 @@
+{
+  "route_lengths_km": {
+    "M1": 187.485699,
+    "M2": 367.686772
+  },
+  "max_service_distance_km": 85.0,
+  "max_interstation_distance_km": 85.0,
+  "charger_peak_power_kw": 150.0,
+  "daily_throughput_kwh_per_charger": 1000.0,
+  "max_chargers_per_site": 6,
+  "grid_capacity_kw_per_site": 900.0,
+  "fixed_site_cost_usd": 103000.0,
+  "budget_usd": 20000000.0,
+  "distance_weight": 0.1,
+  "distance_direction": "demand_to_site",
+  "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+  "directed_distance_matrix_source": "data\\derived\\network_distance_validation\\corridor_site_demand_distances_virtual_edge.csv",
+  "ineligible_distance_sentinel_km": 99999.0,
+  "distance_weight_units_warning": "The composite objective adds USD cost terms and a distance penalty with analyst-set coefficient; until dimensionally calibrated, objective_value_model_units is not USD.",
+  "demand_scenario_solved": "base",
+  "charger_cost_scenario_solved": "base",
+  "requested_mip_rel_gap": 0.001,
+  "time_limit_seconds": 180.0,
+  "grid_upgrade_cost_in_objective": false,
+  "scope_warning": "Three represented subsections only: M1 Section 3 ATC, M2 km9.3-13.1 ATC, and ADB forecast-based M2 km13.1-28.9. Remaining M1/M2 corridor demand is unobserved; results are not final Armenia network siting.",
+  "distance_warning": "Distance is directed demand-to-site OSM shortest-path distance with virtual edge nodes. Cross-corridor/no-path pairs receive a finite 99,999-km sentinel; the 85-km service constraint prevents assignment. Road-edge proximity does not verify legal driveway access.",
+  "cost_warning": "US 150-kW benchmarks are sensitivity inputs only, not Armenia vendor quotes. Grid upgrade, land, tax/import, maintenance and detailed civil costs are not fully represented.",
+  "tariff_source": "ENA official tariff page https://www.ena.am/Info.aspx?id=11&lang=2 ; tariff values shown include VAT.",
+  "nrel_source": "NREL/TP-5400-88513 (2024), https://www.nrel.gov/docs/fy24osti/88513.pdf",
+  "usdot_source": "USDOT Climate Strategies that Work, cost considerations, https://www.transportation.gov/sites/dot.gov/files/2024-12/EV%20Charging%20Infrastructure%20-%20Climate%20Strategies%20that%20Work.pdf"
+}

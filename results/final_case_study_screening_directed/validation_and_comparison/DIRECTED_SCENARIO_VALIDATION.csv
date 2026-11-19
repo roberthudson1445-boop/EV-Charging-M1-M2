@@ -1,0 +1,5 @@
+﻿scenario,status,achieved_mip_rel_gap,opened_station_count,charger_count,installed_peak_power_kw,total_capital_cost_proxy_usd,total_demand_kwh_day,assignment_count,solver_status,mip_gap_le_0.1pct,selected_station_count,selected_charger_count,all_demand_points_assigned,assignment_fraction_sums_to_1,direction_is_demand_to_site,assigned_distances_le_85km,assignments_only_to_selected_sites,assigned_energy_matches_demand,summary_demand_matches_input
+low,SOLVED_WITHIN_REQUESTED_MIP_GAP,0.0009364677198486177,6,7,1049.9999999999998,1697400.0,1881.018888516131,3,True,True,True,True,True,True,True,True,True,True,True
+base,SOLVED_WITHIN_REQUESTED_MIP_GAP,0.0006690666765850087,7,15,2249.9999999996194,3034000.0,10888.903419353828,5,True,True,True,True,True,True,True,True,True,True,True
+high,SOLVED_WITHIN_REQUESTED_MIP_GAP,0.000881465831317981,12,49,7349.999999999996,8791800.0,45593.10565399168,10,True,True,True,True,True,True,True,True,True,True,True
+armstat_ev_share_2_92,SOLVED_WITHIN_REQUESTED_MIP_GAP,0.000977272990487331,7,17,2550.000000000002,3342400.0,12734.365352196812,5,True,True,True,True,True,True,True,True,True,True,True

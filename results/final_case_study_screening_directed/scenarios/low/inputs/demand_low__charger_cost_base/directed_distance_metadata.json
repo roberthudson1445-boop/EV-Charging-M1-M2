@@ -1,0 +1,18 @@
+{
+  "source_file": "data\\derived\\network_distance_validation\\corridor_site_demand_distances_virtual_edge.csv",
+  "distance_direction": "demand_to_site",
+  "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+  "matrix_pairs": 174,
+  "eligible_reachable_pairs": 96,
+  "ineligible_pairs": 78,
+  "service_feasible_pairs_within_85km": 33,
+  "eligible_pairs_over_85km": 80,
+  "service_feasible_pairs_by_demand": {
+    "M1_ATC_ATC_M1_20_7": 12,
+    "M2_ATC_ATC_M2_9_38": 10,
+    "M2_ADB_SECTION_13_1_28_9": 11
+  },
+  "ineligible_sentinel_km": 99999.0,
+  "maximum_service_distance_km": 85.0,
+  "access_connector_limitation": "Virtual edge nodes are inserted on the nearest OSM road edge; the method does not verify a legal/private driveway or parcel access."
+}

@@ -1,0 +1,19 @@
+{
+  "charger_daily_capacity_kwh": 1000.0,
+  "max_service_distance_km": 85.0,
+  "charger_peak_power_kw": 150.0,
+  "budget": 20000000.0,
+  "distance_weight": 0.1,
+  "max_interstation_distance_km": 85.0,
+  "route_lengths_km": {
+    "M1": 187.485699,
+    "M2": 367.686772
+  },
+  "distance_direction": "demand_to_site",
+  "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+  "distance_source_file": "data\\derived\\network_distance_validation\\corridor_site_demand_distances_virtual_edge.csv",
+  "ineligible_distance_sentinel_km": 99999.0,
+  "currency": "USD",
+  "budget_status": "NONBINDING_SCREENING_PLACEHOLDER_NOT_AN_ARMENIA_PROJECT_BUDGET",
+  "grid_connection_capex_status": "EXCLUDED_NO_SITE_SPECIFIC_UTILITY_QUOTE"
+}

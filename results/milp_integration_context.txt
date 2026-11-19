@@ -1,0 +1,1349 @@
+
+
+========== src/ev_charging/data.py ==========
+"""Problem data structures and a small synthetic example."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+
+FloatArray = NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class ProblemData:
+    """Numerical inputs for the EV charging-station MILP.
+
+    Arrays use the order of ``site_names`` and ``demand_names``.
+    ``distance_km[i, j]`` is the one-way road/detour distance from site i
+    to demand point j. ``grid_capacity_kw`` is active power (kW), not kVA.
+    """
+
+    site_names: tuple[str, ...]
+    demand_names: tuple[str, ...]
+    demand_kwh_day: FloatArray
+    distance_km: FloatArray
+    fixed_cost: FloatArray
+    charger_cost: FloatArray
+    charger_daily_capacity_kwh: float
+    max_chargers: NDArray[np.int64]
+    grid_capacity_kw: FloatArray
+    max_service_distance_km: float
+    charger_peak_power_kw: float
+    budget: float
+    distance_weight: float
+    power_cost_weight: FloatArray
+
+    def validate(self) -> None:
+        """Raise ValueError when inputs are inconsistent or physically invalid."""
+        n = len(self.site_names)
+        m = len(self.demand_names)
+        if n == 0 or m == 0:
+            raise ValueError("At least one site and one demand point are required.")
+        if len(set(self.site_names)) != n:
+            raise ValueError("Site names must be unique.")
+        if len(set(self.demand_names)) != m:
+            raise ValueError("Demand-point names must be unique.")
+
+        expected_shapes = {
+            "demand_kwh_day": (m,),
+            "distance_km": (n, m),
+            "fixed_cost": (n,),
+            "charger_cost": (n,),
+            "max_chargers": (n,),
+            "grid_capacity_kw": (n,),
+            "power_cost_weight": (n,),
+        }
+        for field_name, expected in expected_shapes.items():
+            actual = np.asarray(getattr(self, field_name)).shape
+            if actual != expected:
+                raise ValueError(
+                    f"{field_name} must have shape {expected}; got {actual}."
+                )
+
+        nonnegative_fields = (
+            "demand_kwh_day",
+            "distance_km",
+            "fixed_cost",
+            "charger_cost",
+            "grid_capacity_kw",
+            "power_cost_weight",
+        )
+        for field_name in nonnegative_fields:
+            values = np.asarray(getattr(self, field_name), dtype=float)
+            if not np.all(np.isfinite(values)) or np.any(values < 0):
+                raise ValueError(f"{field_name} must contain finite non-negative values.")
+
+        if np.any(np.asarray(self.demand_kwh_day) <= 0):
+            raise ValueError("Every demand point must have strictly positive demand.")
+        max_chargers = np.asarray(self.max_chargers)
+        if np.any(max_chargers < 0) or np.any(max_chargers != np.floor(max_chargers)):
+            raise ValueError("max_chargers must contain non-negative integers.")
+
+        positive_scalars = {
+            "charger_daily_capacity_kwh": self.charger_daily_capacity_kwh,
+            "max_service_distance_km": self.max_service_distance_km,
+            "charger_peak_power_kw": self.charger_peak_power_kw,
+        }
+        for name, value in positive_scalars.items():
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and greater than zero.")
+        if not np.isfinite(self.budget) or self.budget < 0:
+            raise ValueError("budget must be finite and non-negative.")
+        if not np.isfinite(self.distance_weight) or self.distance_weight < 0:
+            raise ValueError("distance_weight must be finite and non-negative.")
+
+
+def make_toy_problem() -> ProblemData:
+    """Return a two-site/two-demand synthetic case for testing only.
+
+    The data are deliberately illustrative and are not measured Armenian data.
+    """
+    problem = ProblemData(
+        site_names=("A", "B"),
+        demand_names=("D1", "D2"),
+        demand_kwh_day=np.array([900.0, 800.0]),
+        # Rows are sites A/B; columns are demand points D1/D2.
+        distance_km=np.array(
+            [
+                [10.0, 100.0],
+                [50.0, 20.0],
+            ]
+        ),
+        fixed_cost=np.array([1_000.0, 10_000.0]),
+        charger_cost=np.array([3_000.0, 3_000.0]),
+        charger_daily_capacity_kwh=1_000.0,
+        max_chargers=np.array([2, 2], dtype=np.int64),
+        # Active power in kW. Do not enter kVA here without conversion.
+        grid_capacity_kw=np.array([300.0, 300.0]),
+        max_service_distance_km=85.0,
+        charger_peak_power_kw=150.0,
+        budget=18_000.0,
+        distance_weight=0.1,
+        power_cost_weight=np.array([5.0, 5.0]),
+    )
+    problem.validate()
+    return problem
+
+
+========== src/ev_charging/model.py ==========
+"""MILP formulation solved through SciPy's HiGHS interface."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import Bounds, LinearConstraint, milp
+from scipy.sparse import coo_matrix
+
+from .data import ProblemData
+
+FloatArray = NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class OptimizationResult:
+    """Parsed solution returned by the MILP solver."""
+
+    objective_value: float
+    opened: NDArray[np.int64]
+    chargers: NDArray[np.int64]
+    assignment: FloatArray
+    power_kw: FloatArray
+    objective_breakdown: dict[str, float]
+    solver_status: int
+    solver_message: str
+
+
+def _indices(n: int, m: int) -> tuple[int, int, int, int]:
+    """Return start offsets for y, z, P, and x blocks in the decision vector."""
+    y_start = 0
+    z_start = n
+    p_start = 2 * n
+    x_start = 3 * n
+    return y_start, z_start, p_start, x_start
+
+
+def _x_index(x_start: int, m: int, i: int, j: int) -> int:
+    return x_start + i * m + j
+
+
+def solve_milp(problem: ProblemData) -> OptimizationResult:
+    """Solve the MILP using SciPy/HiGHS.
+
+    This is the project baseline/benchmark solver. It is not the planned
+    from-scratch Revised Simplex + Gomory + Dual Simplex implementation.
+    """
+    problem.validate()
+    n = len(problem.site_names)
+    m = len(problem.demand_names)
+    y_start, z_start, p_start, x_start = _indices(n, m)
+    num_vars = 3 * n + n * m
+
+    objective = np.zeros(num_vars, dtype=float)
+    lower_bounds = np.zeros(num_vars, dtype=float)
+    upper_bounds = np.full(num_vars, np.inf, dtype=float)
+    integrality = np.zeros(num_vars, dtype=np.int32)
+
+    # Station-open variables y_i (binary).
+    for i in range(n):
+        idx = y_start + i
+        objective[idx] = problem.fixed_cost[i]
+        upper_bounds[idx] = 1.0
+        integrality[idx] = 1
+
+    # Charger-count variables z_i (non-negative integer).
+    for i in range(n):
+        idx = z_start + i
+        objective[idx] = problem.charger_cost[i]
+        upper_bounds[idx] = float(problem.max_chargers[i])
+        integrality[idx] = 1
+
+    # Reserved active-power variables P_i (kW).
+    for i in range(n):
+        idx = p_start + i
+        objective[idx] = problem.power_cost_weight[i]
+        upper_bounds[idx] = float(problem.grid_capacity_kw[i])
+
+    # Assignment variables x_ij. Ineligible pairs are fixed to zero.
+    for i in range(n):
+        for j in range(m):
+            idx = _x_index(x_start, m, i, j)
+            objective[idx] = (
+                problem.distance_weight
+                * problem.demand_kwh_day[j]
+                * problem.distance_km[i, j]
+            )
+            if problem.distance_km[i, j] <= problem.max_service_distance_km:
+                upper_bounds[idx] = 1.0
+            else:
+                upper_bounds[idx] = 0.0
+
+    # Constraint matrix in sparse coordinate form.
+    row_indices: list[int] = []
+    col_indices: list[int] = []
+    values: list[float] = []
+    row_lower: list[float] = []
+    row_upper: list[float] = []
+    row = 0
+
+    def add_row(entries: list[tuple[int, float]], lb: float, ub: float) -> None:
+        nonlocal row
+        for col, value in entries:
+            if value != 0.0:
+                row_indices.append(row)
+                col_indices.append(col)
+                values.append(float(value))
+        row_lower.append(float(lb))
+        row_upper.append(float(ub))
+        row += 1
+
+    # 1) Full demand assignment: sum_i x_ij = 1 for each demand point j.
+    for j in range(m):
+        entries = [(_x_index(x_start, m, i, j), 1.0) for i in range(n)]
+        add_row(entries, 1.0, 1.0)
+
+    # 2) Station coupling: x_ij - y_i <= 0.
+    # 3) Reachability is enforced by x_ij upper bounds set above.
+    for i in range(n):
+        for j in range(m):
+            entries = [
+                (_x_index(x_start, m, i, j), 1.0),
+                (y_start + i, -1.0),
+            ]
+            add_row(entries, -np.inf, 0.0)
+
+    # 4) Charger throughput: sum_j d_j*x_ij - Q*z_i <= 0.
+    for i in range(n):
+        entries = [
+            (_x_index(x_start, m, i, j), problem.demand_kwh_day[j])
+            for j in range(m)
+        ]
+        entries.append((z_start + i, -problem.charger_daily_capacity_kwh))
+        add_row(entries, -np.inf, 0.0)
+
+    # 5) Physical site sizing: z_i - K_i*y_i <= 0.
+    for i in range(n):
+        entries = [
+            (z_start + i, 1.0),
+            (y_start + i, -float(problem.max_chargers[i])),
+        ]
+        add_row(entries, -np.inf, 0.0)
+
+    # 6a) Charger count to active power: P_i - gamma*z_i = 0.
+    for i in range(n):
+        entries = [
+            (p_start + i, 1.0),
+            (z_start + i, -problem.charger_peak_power_kw),
+        ]
+        add_row(entries, 0.0, 0.0)
+
+    # 6b) Grid capacity: P_i - Smax_i*y_i <= 0.
+    for i in range(n):
+        entries = [
+            (p_start + i, 1.0),
+            (y_start + i, -problem.grid_capacity_kw[i]),
+        ]
+        add_row(entries, -np.inf, 0.0)
+
+    # 7) Capital budget: sum_i (f_i*y_i + g_i*z_i) <= B.
+    budget_entries: list[tuple[int, float]] = []
+    for i in range(n):
+        budget_entries.extend(
+            [
+                (y_start + i, problem.fixed_cost[i]),
+                (z_start + i, problem.charger_cost[i]),
+            ]
+        )
+    add_row(budget_entries, -np.inf, problem.budget)
+
+    matrix = coo_matrix(
+        (values, (row_indices, col_indices)), shape=(row, num_vars)
+    ).tocsr()
+
+    result = milp(
+        c=objective,
+        integrality=integrality,
+        bounds=Bounds(lower_bounds, upper_bounds),
+        constraints=LinearConstraint(matrix, np.array(row_lower), np.array(row_upper)),
+        options={"disp": False},
+    )
+
+    if result.x is None or result.status != 0:
+        raise RuntimeError(
+            "The MILP solver did not find an optimal solution. "
+            f"Status={result.status}; message={result.message}"
+        )
+
+    vector = np.asarray(result.x, dtype=float)
+    opened = np.rint(vector[y_start : y_start + n]).astype(np.int64)
+    chargers = np.rint(vector[z_start : z_start + n]).astype(np.int64)
+    power_kw = vector[p_start : p_start + n].copy()
+    assignment = vector[x_start:].reshape(n, m).copy()
+
+    breakdown = {
+        "station_establishment": float(np.dot(problem.fixed_cost, opened)),
+        "charger_installation": float(np.dot(problem.charger_cost, chargers)),
+        "distance_demand_penalty": float(
+            problem.distance_weight
+            * np.sum(
+                problem.demand_kwh_day[np.newaxis, :]
+                * problem.distance_km
+                * assignment
+            )
+        ),
+        "electrical_capacity_cost": float(
+            np.dot(problem.power_cost_weight, power_kw)
+        ),
+    }
+
+    solution = OptimizationResult(
+        objective_value=float(result.fun),
+        opened=opened,
+        chargers=chargers,
+        assignment=assignment,
+        power_kw=power_kw,
+        objective_breakdown=breakdown,
+        solver_status=int(result.status),
+        solver_message=str(result.message),
+    )
+    validate_solution(problem, solution)
+    return solution
+
+
+def validate_solution(
+    problem: ProblemData, solution: OptimizationResult, tolerance: float = 1e-6
+) -> None:
+    """Raise AssertionError if a returned solution violates model constraints."""
+    problem.validate()
+    n = len(problem.site_names)
+    m = len(problem.demand_names)
+
+    assert solution.assignment.shape == (n, m)
+    assert np.all(solution.opened >= 0) and np.all(solution.opened <= 1)
+    assert np.all(np.isin(solution.opened, [0, 1]))
+    assert np.all(solution.chargers >= 0)
+    assert np.all(solution.chargers <= problem.max_chargers)
+    assert np.all(solution.assignment >= -tolerance)
+
+    # Full demand assignment.
+    np.testing.assert_allclose(
+        solution.assignment.sum(axis=0), np.ones(m), atol=tolerance
+    )
+
+    # No assignment to a station that is not open or is too far away.
+    for i in range(n):
+        for j in range(m):
+            if solution.opened[i] == 0 or (
+                problem.distance_km[i, j] > problem.max_service_distance_km
+            ):
+                assert solution.assignment[i, j] <= tolerance
+
+    # Charger capacity, physical size and power constraints.
+    served_kwh = solution.assignment @ problem.demand_kwh_day
+    capacity_kwh = problem.charger_daily_capacity_kwh * solution.chargers
+    assert np.all(served_kwh <= capacity_kwh + tolerance)
+    assert np.all(solution.chargers <= problem.max_chargers * solution.opened)
+    np.testing.assert_allclose(
+        solution.power_kw,
+        problem.charger_peak_power_kw * solution.chargers,
+        atol=tolerance,
+    )
+    assert np.all(solution.power_kw <= problem.grid_capacity_kw * solution.opened + tolerance)
+
+    # Capital budget.
+    capital_cost = float(
+        np.dot(problem.fixed_cost, solution.opened)
+        + np.dot(problem.charger_cost, solution.chargers)
+    )
+    assert capital_cost <= problem.budget + tolerance
+
+    # Objective consistency.
+    np.testing.assert_allclose(
+        sum(solution.objective_breakdown.values()),
+        solution.objective_value,
+        atol=1e-5,
+    )
+
+
+========== src/ev_charging/lp_relaxation.py ==========
+"""Build and solve the continuous LP relaxation of the EV charging model."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+
+from .data import ProblemData
+from .revised_simplex import LPResult, solve_lp
+
+FloatArray = NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class EVLPRelaxationResult:
+    """Parsed LP-relaxation solution for the EV charging problem."""
+
+    lp_result: LPResult
+    opened_relaxed: FloatArray
+    chargers_relaxed: FloatArray
+    power_kw: FloatArray
+    assignment: FloatArray
+    variable_names: tuple[str, ...]
+
+
+def solve_ev_lp_relaxation(problem: ProblemData) -> EVLPRelaxationResult:
+    """Solve the EV model after relaxing integer restrictions on y and z.
+
+    This uses the project's own two-phase Revised Simplex implementation.
+    The relaxation permits fractional station-selection and charger-count
+    values for analysis; those values are not implementable final decisions.
+    """
+    problem.validate()
+    n = len(problem.site_names)
+    m = len(problem.demand_names)
+
+    # Variable order: y[0:n], z[0:n], P[0:n], x[0:n*m].
+    y0, z0, p0, x0 = 0, n, 2 * n, 3 * n
+    number_of_variables = 3 * n + n * m
+
+    def x_index(i: int, j: int) -> int:
+        return x0 + i * m + j
+
+    objective = np.zeros(number_of_variables, dtype=float)
+    names: list[str] = []
+    for i, name in enumerate(problem.site_names):
+        objective[y0 + i] = problem.fixed_cost[i]
+        names.append(f"y_{name}")
+    for i, name in enumerate(problem.site_names):
+        objective[z0 + i] = problem.charger_cost[i]
+        names.append(f"z_{name}")
+    for i, name in enumerate(problem.site_names):
+        objective[p0 + i] = problem.power_cost_weight[i]
+        names.append(f"P_{name}")
+    for i, site in enumerate(problem.site_names):
+        for j, demand in enumerate(problem.demand_names):
+            objective[x_index(i, j)] = (
+                problem.distance_weight
+                * problem.demand_kwh_day[j]
+                * problem.distance_km[i, j]
+            )
+            names.append(f"x_{site}_{demand}")
+
+    ub_rows: list[FloatArray] = []
+    ub_rhs: list[float] = []
+    eq_rows: list[FloatArray] = []
+    eq_rhs: list[float] = []
+
+    # Full demand assignment: sum_i x_ij = 1.
+    for j in range(m):
+        row = np.zeros(number_of_variables)
+        for i in range(n):
+            row[x_index(i, j)] = 1.0
+        eq_rows.append(row)
+        eq_rhs.append(1.0)
+
+    # x_ij <= y_i; unreachable pairs are fixed to zero by equality.
+    for i in range(n):
+        for j in range(m):
+            row = np.zeros(number_of_variables)
+            if problem.distance_km[i, j] > problem.max_service_distance_km:
+                row[x_index(i, j)] = 1.0
+                eq_rows.append(row)
+                eq_rhs.append(0.0)
+            else:
+                row[x_index(i, j)] = 1.0
+                row[y0 + i] = -1.0
+                ub_rows.append(row)
+                ub_rhs.append(0.0)
+
+    # Charger throughput: sum_j d_j*x_ij - Q*z_i <= 0.
+    for i in range(n):
+        row = np.zeros(number_of_variables)
+        for j in range(m):
+            row[x_index(i, j)] = problem.demand_kwh_day[j]
+        row[z0 + i] = -problem.charger_daily_capacity_kwh
+        ub_rows.append(row)
+        ub_rhs.append(0.0)
+
+    # Site sizing: z_i - K_i*y_i <= 0.
+    for i in range(n):
+        row = np.zeros(number_of_variables)
+        row[z0 + i] = 1.0
+        row[y0 + i] = -float(problem.max_chargers[i])
+        ub_rows.append(row)
+        ub_rhs.append(0.0)
+
+    # Power relation P_i - gamma*z_i = 0 and grid capacity.
+    for i in range(n):
+        row = np.zeros(number_of_variables)
+        row[p0 + i] = 1.0
+        row[z0 + i] = -problem.charger_peak_power_kw
+        eq_rows.append(row)
+        eq_rhs.append(0.0)
+
+        row = np.zeros(number_of_variables)
+        row[p0 + i] = 1.0
+        row[y0 + i] = -problem.grid_capacity_kw[i]
+        ub_rows.append(row)
+        ub_rhs.append(0.0)
+
+    # Capital budget.
+    row = np.zeros(number_of_variables)
+    for i in range(n):
+        row[y0 + i] = problem.fixed_cost[i]
+        row[z0 + i] = problem.charger_cost[i]
+    ub_rows.append(row)
+    ub_rhs.append(problem.budget)
+
+    # Relaxed binary bound 0 <= y_i <= 1.
+    for i in range(n):
+        row = np.zeros(number_of_variables)
+        row[y0 + i] = 1.0
+        ub_rows.append(row)
+        ub_rhs.append(1.0)
+
+    A_ub = np.vstack(ub_rows) if ub_rows else None
+    b_ub = np.asarray(ub_rhs, dtype=float) if ub_rows else None
+    A_eq = np.vstack(eq_rows) if eq_rows else None
+    b_eq = np.asarray(eq_rhs, dtype=float) if eq_rows else None
+
+    result = solve_lp(objective, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq)
+    if result.status != "optimal" or result.x is None:
+        raise RuntimeError(f"LP relaxation failed: {result.status}: {result.message}")
+
+    vector = result.x
+    return EVLPRelaxationResult(
+        lp_result=result,
+        opened_relaxed=vector[y0 : y0 + n].copy(),
+        chargers_relaxed=vector[z0 : z0 + n].copy(),
+        power_kw=vector[p0 : p0 + n].copy(),
+        assignment=vector[x0:].reshape(n, m).copy(),
+        variable_names=tuple(names),
+    )
+
+
+========== src/ev_charging/quadratic_extension.py ==========
+"""Convex quadratic power-loss extension for the continuous EV relaxation.
+
+This is a continuous convex QP extension of the LP relaxation. It does not
+solve the mixed-integer quadratic problem and it does not claim site-specific
+loss estimates without engineering inputs for resistance and voltage.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import Bounds, linprog, minimize
+
+from .data import ProblemData
+from .lp_relaxation import solve_ev_lp_relaxation
+
+FloatArray = NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class KKTDiagnostics:
+    """Approximate KKT residuals for equality constraints and lower bounds."""
+
+    primal_feasibility_inf: float
+    stationarity_inf: float
+    dual_feasibility_violation: float
+    complementarity_inf: float
+
+
+@dataclass(frozen=True)
+class QuadraticRelaxationResult:
+    """Solution summary for the continuous convex quadratic relaxation."""
+
+    success: bool
+    message: str
+    objective_value: float | None
+    linear_objective_value: float | None
+    total_power_loss_kw: float | None
+    loss_cost: float | None
+    solution: FloatArray | None
+    iterations: int
+    kkt: KKTDiagnostics | None
+
+
+def _site_array(values: float | NDArray[np.float64], n: int, name: str) -> FloatArray:
+    array = np.asarray(values, dtype=float)
+    if array.ndim == 0:
+        array = np.full(n, float(array), dtype=float)
+    if array.shape != (n,):
+        raise ValueError(f"{name} must be a scalar or an array of length {n}.")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain finite values.")
+    return array
+
+
+def _estimate_kkt(
+    A: FloatArray,
+    b: FloatArray,
+    x: FloatArray,
+    gradient: FloatArray,
+    *,
+    active_tolerance: float,
+) -> KKTDiagnostics:
+    """Estimate KKT residuals for Ax=b and x>=0.
+
+    Equality multipliers are found from the KKT system with a small LP that
+    enforces non-negative multipliers for active lower bounds. This avoids
+    reporting a misleading least-squares multiplier that violates dual
+    feasibility when equality multipliers are non-unique.
+    """
+    free = x > active_tolerance
+    active_lower = ~free
+    A_eq = A[:, free].T if np.any(free) else None
+    b_eq = -gradient[free] if np.any(free) else None
+    A_ub = -A[:, active_lower].T if np.any(active_lower) else None
+    b_ub = gradient[active_lower] if np.any(active_lower) else None
+
+    multiplier_result = linprog(
+        c=np.zeros(A.shape[0], dtype=float),
+        A_ub=A_ub,
+        b_ub=b_ub,
+        A_eq=A_eq,
+        b_eq=b_eq,
+        bounds=[(None, None)] * A.shape[0],
+        method="highs",
+    )
+    if multiplier_result.success:
+        multipliers = np.asarray(multiplier_result.x, dtype=float)
+        reduced_stationarity = gradient + A.T @ multipliers
+        lower_bound_multipliers = np.zeros_like(x)
+        lower_bound_multipliers[active_lower] = reduced_stationarity[active_lower]
+        stationarity = reduced_stationarity - lower_bound_multipliers
+        dual_violation = (
+            max(0.0, -float(np.min(lower_bound_multipliers[active_lower])))
+            if np.any(active_lower)
+            else 0.0
+        )
+    else:
+        # Retain a diagnostic even if the multiplier feasibility problem is
+        # numerically ill-conditioned; a non-zero stationarity residual then
+        # correctly signals that the KKT check was not established.
+        if np.any(free):
+            multipliers, *_ = np.linalg.lstsq(A[:, free].T, -gradient[free], rcond=None)
+        else:
+            multipliers = np.zeros(A.shape[0], dtype=float)
+        reduced_stationarity = gradient + A.T @ multipliers
+        lower_bound_multipliers = np.zeros_like(x)
+        lower_bound_multipliers[active_lower] = np.maximum(
+            reduced_stationarity[active_lower], 0.0
+        )
+        stationarity = reduced_stationarity - lower_bound_multipliers
+        dual_violation = (
+            max(0.0, -float(np.min(reduced_stationarity[active_lower])))
+            if np.any(active_lower)
+            else 0.0
+        )
+
+    return KKTDiagnostics(
+        primal_feasibility_inf=float(np.max(np.abs(A @ x - b))) if b.size else 0.0,
+        stationarity_inf=float(np.max(np.abs(stationarity))) if x.size else 0.0,
+        dual_feasibility_violation=float(dual_violation),
+        complementarity_inf=float(
+            np.max(np.abs(lower_bound_multipliers * x)) if x.size else 0.0
+        ),
+    )
+
+
+def solve_ev_quadratic_relaxation(
+    problem: ProblemData,
+    *,
+    line_resistance_ohm: float | NDArray[np.float64],
+    nominal_voltage_kv: float | NDArray[np.float64],
+    loss_cost_per_kw: float | NDArray[np.float64] = 1.0,
+    tolerance: float = 1e-8,
+    max_iterations: int = 2_000,
+) -> QuadraticRelaxationResult:
+    """Solve the LP relaxation with an added convex quadratic line-loss penalty.
+
+    The proposal's simplified loss relation is used:
+
+        P_loss_i = R_i * (P_i / V_nominal_i)^2.
+
+    Here ``P_i`` is in kW and ``V_nominal_i`` in kV, so the result of the
+    simplified expression is treated as watts and divided by 1000 to report
+    kW. This expression is an approximation; actual three-phase losses need
+    documented voltage level, power factor, phase configuration, line length,
+    conductor resistance, and loading data.
+
+    The objective adds ``loss_cost_per_kw[i] * P_loss_i`` to the LP objective.
+    All coefficients must be non-negative, making the quadratic term convex.
+    The integer restrictions on station-opening and charger-count variables
+    remain relaxed in this QP.
+    """
+    problem.validate()
+    base = solve_ev_lp_relaxation(problem).lp_result
+    if (
+        base.standard_matrix is None
+        or base.standard_rhs is None
+        or base.standard_cost is None
+        or base.standard_solution is None
+    ):
+        raise RuntimeError("The LP relaxation did not retain standard-form data.")
+
+    n = len(problem.site_names)
+    resistance = _site_array(line_resistance_ohm, n, "line_resistance_ohm")
+    voltage = _site_array(nominal_voltage_kv, n, "nominal_voltage_kv")
+    loss_weight = _site_array(loss_cost_per_kw, n, "loss_cost_per_kw")
+    if np.any(resistance < 0):
+        raise ValueError("line_resistance_ohm must be non-negative.")
+    if np.any(voltage <= 0):
+        raise ValueError("nominal_voltage_kv must be greater than zero.")
+    if np.any(loss_weight < 0):
+        raise ValueError("loss_cost_per_kw must be non-negative.")
+
+    A = np.asarray(base.standard_matrix, dtype=float)
+    b = np.asarray(base.standard_rhs, dtype=float)
+    c = np.asarray(base.standard_cost, dtype=float)
+    x0 = np.asarray(base.standard_solution, dtype=float)
+    power_indices = np.arange(2 * n, 3 * n, dtype=int)
+    scale = loss_weight * resistance / (voltage**2 * 1000.0)
+
+    def objective(x: FloatArray) -> float:
+        power = x[power_indices]
+        return float(c @ x + np.dot(scale, power**2))
+
+    def gradient(x: FloatArray) -> FloatArray:
+        grad = c.copy()
+        grad[power_indices] += 2.0 * scale * x[power_indices]
+        return grad
+
+    result = minimize(
+        objective,
+        x0,
+        method="SLSQP",
+        jac=gradient,
+        bounds=Bounds(np.zeros_like(x0), np.full_like(x0, np.inf)),
+        constraints=[
+            {
+                "type": "eq",
+                "fun": lambda x: A @ x - b,
+                "jac": lambda x: A,
+            }
+        ],
+        options={"ftol": tolerance, "maxiter": max_iterations, "disp": False},
+    )
+
+    if not result.success:
+        return QuadraticRelaxationResult(
+            success=False,
+            message=str(result.message),
+            objective_value=None,
+            linear_objective_value=None,
+            total_power_loss_kw=None,
+            loss_cost=None,
+            solution=None,
+            iterations=int(getattr(result, "nit", 0)),
+            kkt=None,
+        )
+
+    solution = np.asarray(result.x, dtype=float)
+    powers = solution[power_indices]
+    losses_kw = resistance * (powers / voltage) ** 2 / 1000.0
+    loss_cost = float(np.dot(loss_weight, losses_kw))
+    linear_value = float(c @ solution)
+    diagnostics = _estimate_kkt(
+        A,
+        b,
+        solution,
+        gradient(solution),
+        active_tolerance=max(tolerance * 10.0, 1e-7),
+    )
+
+    if np.min(solution) < -1e-6:
+        raise RuntimeError("Quadratic solver returned a negative variable.")
+    if diagnostics.primal_feasibility_inf > 1e-5:
+        raise RuntimeError(
+            "Quadratic solver returned a point that violates the standard-form equalities: "
+            f"residual={diagnostics.primal_feasibility_inf:.3g}."
+        )
+
+    return QuadraticRelaxationResult(
+        success=True,
+        message=str(result.message),
+        objective_value=float(result.fun),
+        linear_objective_value=linear_value,
+        total_power_loss_kw=float(np.sum(losses_kw)),
+        loss_cost=loss_cost,
+        solution=solution,
+        iterations=int(getattr(result, "nit", 0)),
+        kkt=diagnostics,
+    )
+
+
+========== src/ev_charging/data_io.py ==========
+"""CSV/JSON loading for documented EV charging case-study inputs."""
+
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .data import ProblemData
+
+
+REQUIRED_SITE_COLUMNS = {
+    "site_id",
+    "fixed_cost",
+    "charger_cost",
+    "max_chargers",
+    "grid_capacity_kw",
+    "power_cost_weight",
+}
+REQUIRED_DEMAND_COLUMNS = {"demand_id", "demand_kwh_day"}
+REQUIRED_DISTANCE_COLUMNS = {"site_id", "demand_id", "distance_km"}
+REQUIRED_CONFIG_KEYS = {
+    "charger_daily_capacity_kwh",
+    "max_service_distance_km",
+    "charger_peak_power_kw",
+    "budget",
+    "distance_weight",
+}
+
+
+def _read_csv(path: Path, required_columns: set[str]) -> list[dict[str, str]]:
+    if not path.exists():
+        raise FileNotFoundError(f"Required data file not found: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        columns = set(reader.fieldnames or [])
+        missing = required_columns - columns
+        if missing:
+            raise ValueError(f"{path.name} is missing columns: {sorted(missing)}")
+        rows = list(reader)
+    if not rows:
+        raise ValueError(f"{path.name} contains a header but no data rows.")
+    return rows
+
+
+def _number(row: dict[str, str], column: str, file_name: str) -> float:
+    raw = row.get(column, "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{file_name}: column '{column}' must contain a numeric value; got {raw!r}."
+        ) from exc
+    if not np.isfinite(value):
+        raise ValueError(f"{file_name}: column '{column}' must be finite.")
+    return value
+
+
+def load_problem_from_csv(data_directory: str | Path) -> ProblemData:
+    """Load a complete ``ProblemData`` instance from a case-data directory.
+
+    Expected files:
+      - sites.csv: site_id, fixed_cost, charger_cost, max_chargers,
+        grid_capacity_kw, power_cost_weight
+      - demand_points.csv: demand_id, demand_kwh_day
+      - distances.csv: site_id, demand_id, distance_km (one row per pair)
+      - config.json: charger capacity, service distance, charger power,
+        budget, and distance weight
+
+    Optional latitude/longitude/source columns may be kept in the CSV files
+    for mapping and provenance; this loader leaves them untouched.
+    """
+    directory = Path(data_directory)
+    site_rows = _read_csv(directory / "sites.csv", REQUIRED_SITE_COLUMNS)
+    demand_rows = _read_csv(directory / "demand_points.csv", REQUIRED_DEMAND_COLUMNS)
+    distance_rows = _read_csv(directory / "distances.csv", REQUIRED_DISTANCE_COLUMNS)
+
+    config_path = directory / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Required configuration file not found: {config_path}")
+    with config_path.open("r", encoding="utf-8") as stream:
+        config: Any = json.load(stream)
+    if not isinstance(config, dict):
+        raise ValueError("config.json must contain a JSON object.")
+    missing_config = REQUIRED_CONFIG_KEYS - set(config)
+    if missing_config:
+        raise ValueError(f"config.json is missing keys: {sorted(missing_config)}")
+
+    site_names = tuple(row["site_id"].strip() for row in site_rows)
+    demand_names = tuple(row["demand_id"].strip() for row in demand_rows)
+    if any(not name for name in site_names) or len(set(site_names)) != len(site_names):
+        raise ValueError("sites.csv must contain non-empty, unique site_id values.")
+    if any(not name for name in demand_names) or len(set(demand_names)) != len(demand_names):
+        raise ValueError("demand_points.csv must contain non-empty, unique demand_id values.")
+
+    site_index = {name: index for index, name in enumerate(site_names)}
+    demand_index = {name: index for index, name in enumerate(demand_names)}
+    distance_matrix = np.full((len(site_names), len(demand_names)), np.nan, dtype=float)
+    seen_pairs: set[tuple[str, str]] = set()
+    for row in distance_rows:
+        site_id = row["site_id"].strip()
+        demand_id = row["demand_id"].strip()
+        pair = (site_id, demand_id)
+        if site_id not in site_index:
+            raise ValueError(f"distances.csv references unknown site_id {site_id!r}.")
+        if demand_id not in demand_index:
+            raise ValueError(f"distances.csv references unknown demand_id {demand_id!r}.")
+        if pair in seen_pairs:
+            raise ValueError(f"distances.csv contains duplicate pair {pair!r}.")
+        seen_pairs.add(pair)
+        distance_matrix[site_index[site_id], demand_index[demand_id]] = _number(
+            row, "distance_km", "distances.csv"
+        )
+
+    expected_pairs = len(site_names) * len(demand_names)
+    if len(seen_pairs) != expected_pairs:
+        missing_pairs = [
+            (site, demand)
+            for site in site_names
+            for demand in demand_names
+            if (site, demand) not in seen_pairs
+        ]
+        preview = missing_pairs[:5]
+        raise ValueError(
+            f"distances.csv must contain all {expected_pairs} site-demand pairs; "
+            f"missing {len(missing_pairs)} (examples: {preview})."
+        )
+
+    try:
+        max_chargers_float = np.array(
+            [_number(row, "max_chargers", "sites.csv") for row in site_rows],
+            dtype=float,
+        )
+    except ValueError:
+        raise
+    if np.any(max_chargers_float != np.floor(max_chargers_float)):
+        raise ValueError("sites.csv max_chargers values must be integers.")
+
+    def config_number(key: str) -> float:
+        try:
+            value = float(config[key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"config.json key '{key}' must be numeric.") from exc
+        if not np.isfinite(value):
+            raise ValueError(f"config.json key '{key}' must be finite.")
+        return value
+
+    problem = ProblemData(
+        site_names=site_names,
+        demand_names=demand_names,
+        demand_kwh_day=np.array(
+            [_number(row, "demand_kwh_day", "demand_points.csv") for row in demand_rows],
+            dtype=float,
+        ),
+        distance_km=distance_matrix,
+        fixed_cost=np.array(
+            [_number(row, "fixed_cost", "sites.csv") for row in site_rows], dtype=float
+        ),
+        charger_cost=np.array(
+            [_number(row, "charger_cost", "sites.csv") for row in site_rows], dtype=float
+        ),
+        charger_daily_capacity_kwh=config_number("charger_daily_capacity_kwh"),
+        max_chargers=max_chargers_float.astype(np.int64),
+        grid_capacity_kw=np.array(
+            [_number(row, "grid_capacity_kw", "sites.csv") for row in site_rows],
+            dtype=float,
+        ),
+        max_service_distance_km=config_number("max_service_distance_km"),
+        charger_peak_power_kw=config_number("charger_peak_power_kw"),
+        budget=config_number("budget"),
+        distance_weight=config_number("distance_weight"),
+        power_cost_weight=np.array(
+            [_number(row, "power_cost_weight", "sites.csv") for row in site_rows],
+            dtype=float,
+        ),
+    )
+    problem.validate()
+    return problem
+
+
+========== tests/test_model.py ==========
+"""Automated checks for the illustrative MILP baseline."""
+
+import numpy as np
+
+from ev_charging import make_toy_problem, solve_milp, validate_solution
+
+
+def test_toy_problem_has_an_optimal_feasible_solution() -> None:
+    problem = make_toy_problem()
+    solution = solve_milp(problem)
+
+    validate_solution(problem, solution)
+
+    assert solution.solver_status == 0
+    assert solution.opened.tolist() == [1, 1]
+    assert solution.chargers.tolist() == [1, 1]
+    np.testing.assert_allclose(solution.assignment, [[1.0, 0.0], [0.0, 1.0]], atol=1e-6)
+    np.testing.assert_allclose(solution.power_kw, [150.0, 150.0], atol=1e-6)
+    assert np.isclose(solution.objective_value, 21000.0, atol=1e-6)
+
+
+def test_unreachable_assignment_is_zero() -> None:
+    problem = make_toy_problem()
+    solution = solve_milp(problem)
+
+    # Site A is 100 km from demand D2, beyond the 85 km service threshold.
+    assert solution.assignment[0, 1] <= 1e-8
+
+
+def test_revised_simplex_solves_classic_two_variable_lp() -> None:
+    from ev_charging.revised_simplex import solve_lp
+
+    # max 3*x1 + 2*x2 subject to x1+x2<=4, 2*x1+x2<=5.
+    result = solve_lp(
+        np.array([-3.0, -2.0]),
+        A_ub=np.array([[1.0, 1.0], [2.0, 1.0]]),
+        b_ub=np.array([4.0, 5.0]),
+    )
+    assert result.status == "optimal"
+    np.testing.assert_allclose(result.x, [1.0, 3.0], atol=1e-7)
+    assert np.isclose(result.objective_value, -9.0, atol=1e-7)
+
+
+def test_revised_simplex_handles_equality_and_greater_equal_constraints() -> None:
+    from ev_charging.revised_simplex import solve_lp
+
+    # min x1 + 2*x2 subject to x1+x2=3, x1>=1, x>=0.
+    result = solve_lp(
+        np.array([1.0, 2.0]),
+        A_eq=np.array([[1.0, 1.0]]),
+        b_eq=np.array([3.0]),
+        A_ge=np.array([[1.0, 0.0]]),
+        b_ge=np.array([1.0]),
+    )
+    assert result.status == "optimal"
+    np.testing.assert_allclose(result.x, [3.0, 0.0], atol=1e-7)
+    assert np.isclose(result.objective_value, 3.0, atol=1e-7)
+
+
+def test_revised_simplex_detects_infeasible_problem() -> None:
+    from ev_charging.revised_simplex import solve_lp
+
+    # x <= 1 and x >= 2 cannot both hold.
+    result = solve_lp(
+        np.array([1.0]),
+        A_ub=np.array([[1.0]]),
+        b_ub=np.array([1.0]),
+        A_ge=np.array([[1.0]]),
+        b_ge=np.array([2.0]),
+    )
+    assert result.status == "infeasible"
+
+
+def test_ev_lp_relaxation_runs_with_in_house_revised_simplex() -> None:
+    from ev_charging.lp_relaxation import solve_ev_lp_relaxation
+
+    problem = make_toy_problem()
+    result = solve_ev_lp_relaxation(problem)
+    assert result.lp_result.status == "optimal"
+    assert result.lp_result.x is not None
+    assert np.all(result.opened_relaxed >= -1e-8)
+    assert np.all(result.opened_relaxed <= 1.0 + 1e-8)
+    np.testing.assert_allclose(result.assignment.sum(axis=0), [1.0, 1.0], atol=1e-7)
+
+
+def test_gomory_cut_and_dual_simplex_round_fractional_integer_up() -> None:
+    from ev_charging.gomory import solve_with_gomory_cuts
+    from ev_charging.revised_simplex import solve_lp
+
+    # min x subject to x >= 1.5, where x must be integer.
+    lp = solve_lp(
+        np.array([1.0]),
+        A_ge=np.array([[1.0]]),
+        b_ge=np.array([1.5]),
+    )
+    assert lp.status == "optimal"
+    np.testing.assert_allclose(lp.x, [1.5], atol=1e-8)
+
+    result = solve_with_gomory_cuts(lp, integer_variable_indices=[0], max_cuts=10)
+    assert result.status == "integer_optimal"
+    assert len(result.cuts) == 1
+    np.testing.assert_allclose(result.lp_result.x, [2.0], atol=1e-8)
+    assert np.isclose(result.lp_result.objective_value, 2.0, atol=1e-8)
+
+
+def test_gomory_cutting_plane_matches_highs_on_ev_toy_case() -> None:
+    from ev_charging.gomory import solve_with_gomory_cuts
+    from ev_charging.lp_relaxation import solve_ev_lp_relaxation
+
+    problem = make_toy_problem()
+    relaxation = solve_ev_lp_relaxation(problem)
+    site_count = len(problem.site_names)
+    result = solve_with_gomory_cuts(
+        relaxation.lp_result,
+        integer_variable_indices=list(range(2 * site_count)),
+        max_cuts=100,
+    )
+    benchmark = solve_milp(problem)
+
+    assert result.status == "integer_optimal"
+    assert len(result.cuts) > 0
+    np.testing.assert_allclose(
+        result.lp_result.objective_value, benchmark.objective_value, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result.lp_result.x[:site_count], benchmark.opened, atol=1e-8
+    )
+    np.testing.assert_allclose(
+        result.lp_result.x[site_count : 2 * site_count], benchmark.chargers, atol=1e-8
+    )
+
+
+def test_gomory_does_not_cut_fractional_continuous_variables() -> None:
+    from ev_charging.gomory import solve_with_gomory_cuts
+    from ev_charging.revised_simplex import solve_lp
+
+    # x is integer and fixed at 1; y is continuous and optimally 0.5.
+    lp = solve_lp(
+        np.array([1.0, 1.0]),
+        A_ge=np.array([[1.0, 0.0], [0.0, 1.0]]),
+        b_ge=np.array([1.0, 0.5]),
+    )
+    result = solve_with_gomory_cuts(lp, integer_variable_indices=[0])
+    assert result.status == "integer_optimal"
+    assert len(result.cuts) == 0
+    np.testing.assert_allclose(result.lp_result.x, [1.0, 0.5], atol=1e-8)
+
+
+def test_csv_loader_reads_complete_case_data(tmp_path) -> None:
+    import json
+
+    from ev_charging.data_io import load_problem_from_csv
+
+    (tmp_path / "sites.csv").write_text(
+        "site_id,fixed_cost,charger_cost,max_chargers,grid_capacity_kw,power_cost_weight\n"
+        "A,1000,3000,2,300,5\n"
+        "B,10000,3000,2,300,5\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "demand_points.csv").write_text(
+        "demand_id,demand_kwh_day\nD1,900\nD2,800\n", encoding="utf-8"
+    )
+    (tmp_path / "distances.csv").write_text(
+        "site_id,demand_id,distance_km\n"
+        "A,D1,10\nA,D2,100\nB,D1,50\nB,D2,20\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "charger_daily_capacity_kwh": 1000,
+                "max_service_distance_km": 85,
+                "charger_peak_power_kw": 150,
+                "budget": 18000,
+                "distance_weight": 0.1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    problem = load_problem_from_csv(tmp_path)
+    assert problem.site_names == ("A", "B")
+    assert problem.demand_names == ("D1", "D2")
+    np.testing.assert_allclose(problem.distance_km, [[10, 100], [50, 20]])
+
+
+def test_csv_loader_rejects_missing_distance_pairs(tmp_path) -> None:
+    import json
+
+    import pytest
+    from ev_charging.data_io import load_problem_from_csv
+
+    (tmp_path / "sites.csv").write_text(
+        "site_id,fixed_cost,charger_cost,max_chargers,grid_capacity_kw,power_cost_weight\n"
+        "A,1000,3000,2,300,5\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "demand_points.csv").write_text(
+        "demand_id,demand_kwh_day\nD1,900\nD2,800\n", encoding="utf-8"
+    )
+    (tmp_path / "distances.csv").write_text(
+        "site_id,demand_id,distance_km\nA,D1,10\n", encoding="utf-8"
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "charger_daily_capacity_kwh": 1000,
+                "max_service_distance_km": 85,
+                "charger_peak_power_kw": 150,
+                "budget": 18000,
+                "distance_weight": 0.1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must contain all"):
+        load_problem_from_csv(tmp_path)
+
+
+def test_traffic_demand_estimation_uses_explicit_scenario_assumptions() -> None:
+    from ev_charging.demand_estimation import (
+        TrafficDemandScenario,
+        estimate_daily_charging_demand,
+    )
+
+    scenario = TrafficDemandScenario(
+        demand_id="M1_TEST",
+        aadt_vehicles_per_day=10_000,
+        ev_share=0.05,
+        charging_probability=0.20,
+        energy_per_session_kwh=30.0,
+        aadt_year=2024,
+        source="Illustrative scenario only",
+    )
+    assert estimate_daily_charging_demand(scenario) == 3_000.0
+
+
+def test_quadratic_power_loss_extension_is_feasible_and_convex() -> None:
+    from ev_charging.data import ProblemData
+    from ev_charging.lp_relaxation import solve_ev_lp_relaxation
+    from ev_charging.quadratic_extension import solve_ev_quadratic_relaxation
+
+    problem = ProblemData(
+        site_names=("A", "B"),
+        demand_names=("D1", "D2"),
+        demand_kwh_day=np.array([900.0, 900.0]),
+        distance_km=np.array([[10.0, 10.0], [20.0, 20.0]]),
+        fixed_cost=np.array([5_000.0, 5_000.0]),
+        charger_cost=np.array([1_000.0, 1_000.0]),
+        charger_daily_capacity_kwh=1_000.0,
+        max_chargers=np.array([2, 2], dtype=np.int64),
+        grid_capacity_kw=np.array([300.0, 300.0]),
+        max_service_distance_km=85.0,
+        charger_peak_power_kw=150.0,
+        budget=20_000.0,
+        distance_weight=0.001,
+        power_cost_weight=np.array([0.1, 0.1]),
+    )
+    lp = solve_ev_lp_relaxation(problem)
+    result = solve_ev_quadratic_relaxation(
+        problem,
+        line_resistance_ohm=np.array([1.0, 0.01]),
+        nominal_voltage_kv=np.array([10.0, 10.0]),
+        loss_cost_per_kw=np.array([1_000.0, 1_000.0]),
+    )
+    assert result.success
+    assert result.solution is not None
+    assert result.objective_value is not None
+    assert result.linear_objective_value is not None
+    assert result.objective_value >= result.linear_objective_value
+    assert result.total_power_loss_kw is not None and result.total_power_loss_kw >= 0
+    assert result.loss_cost is not None and result.loss_cost >= 0
+    assert result.kkt is not None
+    assert result.kkt.primal_feasibility_inf < 1e-6
+    assert result.kkt.stationarity_inf < 1e-5
+    assert result.kkt.dual_feasibility_violation < 1e-6
+    assert result.kkt.complementarity_inf < 1e-5
+
+    # The linear relaxation prefers the closer site A; the added loss penalty
+    # moves most assignment to lower-resistance site B in this illustrative case.
+    n = len(problem.site_names)
+    m = len(problem.demand_names)
+    lp_assignment = lp.assignment
+    qp_assignment = result.solution[3 * n : 3 * n + n * m].reshape(n, m)
+    assert lp_assignment[0].sum() > lp_assignment[1].sum()
+    assert qp_assignment[1].sum() > qp_assignment[0].sum()
+
+
+def test_mm_s_queue_metrics_are_stable_and_wait_falls_with_more_chargers() -> None:
+    from ev_charging.queueing import queue_metrics_from_daily_energy
+
+    two = queue_metrics_from_daily_energy(
+        daily_charging_energy_kwh=2000,
+        average_session_energy_kwh=25,
+        operating_hours_per_day=16,
+        average_service_minutes=20,
+        chargers=2,
+    )
+    three = queue_metrics_from_daily_energy(
+        daily_charging_energy_kwh=2000,
+        average_session_energy_kwh=25,
+        operating_hours_per_day=16,
+        average_service_minutes=20,
+        chargers=3,
+    )
+    assert two.stable and three.stable
+    assert 0 <= two.probability_wait <= 1
+    assert three.average_wait_minutes < two.average_wait_minutes
+
+
+def test_mm_s_queue_reports_unstable_when_arrivals_exceed_service_capacity() -> None:
+    from math import inf
+
+    from ev_charging.queueing import mm_s_queue_metrics
+
+    result = mm_s_queue_metrics(
+        arrival_rate_per_hour=7.0,
+        service_rate_per_hour_per_charger=3.0,
+        chargers=2,
+    )
+    assert not result.stable
+    assert result.average_wait_minutes == inf
+
+
+def test_evup_reference_snapshot_contains_twelve_unique_public_locations() -> None:
+    import csv
+    from pathlib import Path
+
+    snapshot = Path(__file__).parents[1] / "data" / "reference" / "evup_public_stations_snapshot_2026-11-18.csv"
+    with snapshot.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 12
+    codes = [row["station_code"] for row in rows]
+    assert len(set(codes)) == 12
+    assert all(row["source_last_verified"] == "2026-10-25" for row in rows)
+    assert all(row["source_url"] == "https://evup.app/map" for row in rows)

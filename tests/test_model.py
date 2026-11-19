@@ -334,3 +334,163 @@ def test_evup_reference_snapshot_contains_twelve_unique_public_locations() -> No
     assert len(set(codes)) == 12
     assert all(row["source_last_verified"] == "2026-10-25" for row in rows)
     assert all(row["source_url"] == "https://evup.app/map" for row in rows)
+
+
+
+def _make_interstation_gap_problem():
+    from ev_charging.data import ProblemData
+
+    return ProblemData(
+        site_names=("S000", "S050", "S100", "S150"),
+        demand_names=("D1",),
+        demand_kwh_day=np.array([100.0]),
+        distance_km=np.array([[20.0], [0.0], [20.0], [40.0]]),
+        fixed_cost=np.array([1000.0, 1.0, 10.0, 1000.0]),
+        charger_cost=np.zeros(4),
+        charger_daily_capacity_kwh=1000.0,
+        max_chargers=np.ones(4, dtype=np.int64),
+        grid_capacity_kw=np.full(4, 150.0),
+        max_service_distance_km=85.0,
+        charger_peak_power_kw=150.0,
+        budget=5000.0,
+        distance_weight=0.0,
+        power_cost_weight=np.zeros(4),
+        site_route_ids=("M1", "M1", "M1", "M1"),
+        site_chainage_km=np.array([0.0, 50.0, 100.0, 150.0]),
+        route_lengths_km={"M1": 150.0},
+        max_interstation_distance_km=60.0,
+    )
+
+
+def test_interstation_gap_rows_enforce_consecutive_spacing_and_endpoints() -> None:
+    problem = _make_interstation_gap_problem()
+    problem.validate()
+    rows = problem.interstation_gap_rows()
+    assert rows
+
+    # Two middle stations at chainages 50 and 100 cover [0, 150] with
+    # consecutive gaps of 50 km, including both route boundaries.
+    valid_opened = np.array([0, 1, 1, 0], dtype=float)
+    for coefficients, rhs in rows:
+        lhs = sum(value * valid_opened[index] for index, value in coefficients)
+        assert lhs <= rhs + 1e-9
+
+    # A single station at km 50 leaves a 100 km gap to the route end.
+    invalid_opened = np.array([0, 1, 0, 0], dtype=float)
+    assert any(
+        sum(value * invalid_opened[index] for index, value in coefficients) > rhs + 1e-9
+        for coefficients, rhs in rows
+    )
+
+    # Exhaustively compare all 2^4 station selections with the direct definition
+    # of maximum consecutive spacing, including both route endpoints.
+    chainages = np.asarray(problem.site_chainage_km, dtype=float)
+    for mask in range(1 << len(problem.site_names)):
+        opened = np.array([(mask >> i) & 1 for i in range(len(problem.site_names))], dtype=float)
+        selected_positions = [
+            chainages[i] for i in range(len(problem.site_names)) if opened[i] > 0.5
+        ]
+        ordered_positions = sorted([0.0, *selected_positions, 150.0])
+        direct_check = max(np.diff(ordered_positions)) <= 60.0 + 1e-9
+        row_check = all(
+            sum(value * opened[index] for index, value in coefficients) <= rhs + 1e-9
+            for coefficients, rhs in rows
+        )
+        assert row_check == direct_check
+
+
+def test_milp_uses_interstation_gap_and_open_station_has_a_charger() -> None:
+    from ev_charging.model import solve_milp
+
+    problem = _make_interstation_gap_problem()
+    solution = solve_milp(problem)
+    validate_solution(problem, solution)
+
+    # S050 serves the demand. S100 is additionally required to keep the final
+    # route-end gap <= 60 km. The selected corridor sites must be real stations.
+    assert solution.opened.tolist() == [0, 1, 1, 0]
+    assert solution.chargers.tolist() == [0, 1, 1, 0]
+
+
+def test_lp_relaxation_includes_the_same_interstation_gap_rows() -> None:
+    from ev_charging.lp_relaxation import solve_ev_lp_relaxation
+
+    problem = _make_interstation_gap_problem()
+    result = solve_ev_lp_relaxation(problem)
+    assert result.lp_result.status == "optimal"
+    for coefficients, rhs in problem.interstation_gap_rows():
+        lhs = sum(
+            value * result.opened_relaxed[index]
+            for index, value in coefficients
+        )
+        assert lhs <= rhs + 1e-7
+    # The LP is allowed to use fractional station-opening values, but it must
+    # retain positive opening at the intermediate positions needed by the gap.
+    assert result.opened_relaxed[1] > 0.0
+    assert result.opened_relaxed[2] > 0.0
+
+
+def test_interstation_gap_metadata_must_be_complete() -> None:
+    from dataclasses import replace
+    import pytest
+
+    problem = make_toy_problem()
+    incomplete = replace(problem, max_interstation_distance_km=80.0)
+    with pytest.raises(ValueError, match="must include site_route_ids"):
+        incomplete.validate()
+
+
+def test_csv_loader_reads_optional_interstation_gap_metadata(tmp_path) -> None:
+    import json
+    from ev_charging.data_io import load_problem_from_csv
+
+    (tmp_path / "sites.csv").write_text(
+        "site_id,fixed_cost,charger_cost,max_chargers,grid_capacity_kw,power_cost_weight,route_id,chainage_km\n"
+        "A,1000,3000,2,300,5,M1,0\n"
+        "B,1000,3000,2,300,5,M1,50\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "demand_points.csv").write_text(
+        "demand_id,demand_kwh_day\nD1,900\n", encoding="utf-8"
+    )
+    (tmp_path / "distances.csv").write_text(
+        "site_id,demand_id,distance_km\nA,D1,10\nB,D1,20\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "charger_daily_capacity_kwh": 1000,
+                "max_service_distance_km": 85,
+                "charger_peak_power_kw": 150,
+                "budget": 18000,
+                "distance_weight": 0.1,
+                "route_lengths_km": {"M1": 100.0},
+                "max_interstation_distance_km": 60.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    problem = load_problem_from_csv(tmp_path)
+    assert problem.site_route_ids == ("M1", "M1")
+    np.testing.assert_allclose(problem.site_chainage_km, [0.0, 50.0])
+    assert problem.route_lengths_km == {"M1": 100.0}
+    assert problem.max_interstation_distance_km == 60.0
+    assert problem.interstation_gap_rows()
+
+
+def test_milp_solver_exposes_relative_gap_diagnostics() -> None:
+    problem = make_toy_problem()
+    solution = solve_milp(problem, mip_rel_gap=0.01, time_limit_seconds=10.0)
+    assert solution.solver_status == 0
+    assert solution.mip_gap is None or solution.mip_gap >= 0.0
+    assert solution.mip_node_count is None or solution.mip_node_count >= 0
+
+
+def test_milp_solver_rejects_invalid_relative_gap() -> None:
+    import pytest
+
+    problem = make_toy_problem()
+    with pytest.raises(ValueError, match="mip_rel_gap"):
+        solve_milp(problem, mip_rel_gap=-0.01)

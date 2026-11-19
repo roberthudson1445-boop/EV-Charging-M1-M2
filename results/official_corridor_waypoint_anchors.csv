@@ -1,0 +1,45 @@
+﻿route_id,sequence_order,waypoint_name,anchor_longitude,anchor_latitude,anchor_source,network_node,network_snap_distance_m,anchor_snap_warning
+M1,1,Yerevan,44.4827306,40.1517649,selected nearest tagged M1/M2 road candidate,1315175117,0.0,False
+M1,2,Kasakh,44.44777498880316,40.22779734621292,selected nearest tagged M1/M2 road candidate,1332571633,9.475056577362201,False
+M1,3,Proshyan,44.4165013,40.25999999999999,selected nearest tagged M1/M2 road candidate,8346218876,0.0,False
+M1,4,Ashtarak,44.3834072,40.2899027,selected nearest tagged M1/M2 road candidate,597102867,0.0,False
+M1,5,Davtashen,43.947480772109344,40.35451005988665,selected nearest tagged M1/M2 road candidate,3429088916,63.28969842818545,False
+M1,6,Katnaghbyur,43.92213523338999,40.371604348446596,selected nearest tagged M1/M2 road candidate,7875007600,27.653135567539866,False
+M1,7,Mastara,43.8705197,40.44706119999999,selected nearest tagged M1/M2 road candidate,11654874733,9.331397911231848e-10,False
+M1,8,Lanjik,43.87010375582671,40.50466355783788,selected nearest tagged M1/M2 road candidate,11608896104,13.341464584638015,False
+M1,9,Maralik,43.8778976,40.5835078,selected nearest tagged M1/M2 road candidate,8927608330,0.0,False
+M1,10,Lusakert,43.85180611617228,40.67016831510403,selected nearest tagged M1/M2 road candidate,8927605238,16.991676131626065,False
+M1,11,Azatan,43.8406811,40.7097687,selected nearest tagged M1/M2 road candidate,14210265538,0.0,False
+M1,12,Arevik,43.84678010409777,40.770031575956544,selected nearest tagged M1/M2 road candidate,1003150183,59.82747348202571,False
+M1,13,Mayisyan,43.8378053,40.84588339999999,selected nearest tagged M1/M2 road candidate,7515855613,5.820766091346741e-11,False
+M1,14,Keti,43.8466747,40.8709433,selected nearest tagged M1/M2 road candidate,11670503403,0.0,False
+M1,15,Pokrashen,43.8772202,40.8937514,selected nearest tagged M1/M2 road candidate,210390696,0.0,False
+M1,16,Vardaghbyur,43.8968045511132,40.97363528970279,selected nearest tagged M1/M2 road candidate,5246777730,38.39312564771546,False
+M1,17,Ashotsk,43.8602587,41.039927899999995,selected nearest tagged M1/M2 road candidate,4195957832,0.0,False
+M1,18,Bavra,43.8082338,41.117506600000006,selected nearest tagged M1/M2 road candidate,1224622165,0.0,False
+M2,1,Yerevan,44.4956877,40.1419701,selected nearest tagged M1/M2 road candidate,12560320974,0.0,False
+M2,2,Ayntap,44.46198607042698,40.10229269854038,selected nearest tagged M1/M2 road candidate,11986184631,14.072766422605127,False
+M2,3,Masis,44.4546925,40.074018800000005,selected nearest tagged M1/M2 road candidate,10760845930,0.0,False
+M2,4,Artashat,44.5301387,39.95706899999999,selected nearest tagged M1/M2 road candidate,1987669400,0.0,False
+M2,5,Pokr Vedi,44.607770612432645,39.90676445930251,selected nearest tagged M1/M2 road candidate,8540593443,3.2956922903222297,False
+M2,6,Surenavan,44.775977451409325,39.789465545944886,selected nearest tagged M1/M2 road candidate,2431058358,11.300640241746722,False
+M2,7,Armash,44.794467408390254,39.770087613334546,selected nearest tagged M1/M2 road candidate,10682449685,15.110559986810715,False
+M2,8,Yeraskh,44.8292625,39.7414879,selected nearest tagged M1/M2 road candidate,12940783378,0.0,False
+M2,9,Paruyr Sevak,44.92070068353777,39.770512088315186,selected nearest tagged M1/M2 road candidate,130062187,0.5479389852240477,False
+M2,10,Chiva,45.1350566,39.76406419999999,selected nearest tagged M1/M2 road candidate,11687836999,9.313225746154785e-10,False
+M2,11,Arpi,45.2760511299969,39.73621270743281,selected nearest tagged M1/M2 road candidate,410561004,37.264543546764905,False
+M2,12,Yeghegnadzor,45.3318294,39.754335399999995,selected nearest tagged M1/M2 road candidate,760300131,9.313225746154785e-10,False
+M2,13,Vayk,45.4777107565214,39.68663767052694,selected nearest tagged M1/M2 road candidate,4474506261,16.68729680451628,False
+M2,14,Saravan,45.6533270971045,39.71839656640679,selected nearest tagged M1/M2 road candidate,5038913159,6.5560915034858445,False
+M2,15,Saralanj,45.66765,39.70999,OSM neighbourhood node 5659256801 (Saralanj near Saravan),2750720109,63.030325470297676,False
+M2,16,Sarnakunq,45.892868692338894,39.64266433197242,selected nearest tagged M1/M2 road candidate,2925156498,8.834225756388033,False
+M2,17,Noravan,46.09099043535031,39.517598251167165,selected nearest tagged M1/M2 road candidate,11375207523,2.279500129030404,False
+M2,18,Ltsen,46.1595416,39.4466249,selected nearest tagged M1/M2 road candidate,1984095170,0.0,False
+M2,19,Tatev,46.2482545,39.3785343,selected nearest tagged M1/M2 road candidate,4959283701,0.0,False
+M2,20,Aghvani,46.30740662920092,39.35595217668478,selected nearest tagged M1/M2 road candidate,6793605654,12.96355676753712,False
+M2,21,Tandzaver,46.3312346,39.35150279999999,selected nearest tagged M1/M2 road candidate,1440683341,9.313225746154785e-10,False
+M2,22,Syunik,46.466375,39.204966,alternate Syunik candidate snap from OSM node 928504712,1440791095,6.505804965149088,False
+M2,23,Kapan,46.404858,39.209006,alternate Kapan candidate snap from OSM node 210231290,5237009726,26.098309397384625,False
+M2,24,Kajaran,46.1599838,39.14967519999998,selected nearest tagged M1/M2 road candidate,1884452851,9.313225746154785e-10,False
+M2,25,Vardanidzor,46.21357810893585,38.97168953191489,selected nearest tagged M1/M2 road candidate,2228664837,86.55656971793387,False
+M2,26,Meghri,46.2455763,38.8990152,selected nearest tagged M1/M2 road candidate,1894383018,0.0,False

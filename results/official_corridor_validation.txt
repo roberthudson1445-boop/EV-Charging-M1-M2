@@ -1,0 +1,29 @@
+OFFICIAL CORRIDOR ROUTE VALIDATION
+Diagnostic checks only; OSM-derived routes require map/official-alignment review.
+
+M1: 187.498 km | tagged 96.77% | connectors 6.052 km | other M roads 0.000 km
+  edges=2658, legs=17, anchors=18, max anchor snap=63.3 m
+  chainage discontinuities=0, node discontinuities=0, edge length inconsistencies=0
+
+M2: 367.565 km | tagged 99.80% | connectors 0.727 km | other M roads 0.000 km
+  edges=7966, legs=25, anchors=26, max anchor snap=86.6 m
+  chainage discontinuities=0, node discontinuities=0, edge length inconsistencies=0
+
+ERRORS
+- None detected by structural checks
+
+WARNINGS / MANUAL REVIEW
+- M1: 3 leg(s) have detour ratio > 1.5
+- M1: 1 leg(s) have tagged-road share < 90%
+- M2: 6 leg(s) have detour ratio > 1.5
+
+Legs flagged for review (detour > 1.5, tagged share < 90%, or non-OK status):
+- M1 Mastara -> Lanjik: 10.22 km, detour=1.60, tagged=93.9% [detour_ratio>1.5]
+- M1 Lanjik -> Maralik: 15.36 km, detour=1.75, tagged=82.5% [detour_ratio>1.5; tagged_share<90%]
+- M1 Azatan -> Arevik: 17.65 km, detour=2.65, tagged=96.2% [detour_ratio>1.5]
+- M2 Yerevan -> Ayntap: 8.00 km, detour=1.53, tagged=90.9% [detour_ratio>1.5]
+- M2 Ayntap -> Masis: 5.73 km, detour=1.78, tagged=100.0% [detour_ratio>1.5]
+- M2 Noravan -> Ltsen: 15.81 km, detour=1.61, tagged=100.0% [detour_ratio>1.5]
+- M2 Ltsen -> Tatev: 20.50 km, detour=1.91, tagged=100.0% [detour_ratio>1.5]
+- M2 Tatev -> Aghvani: 12.27 km, detour=2.17, tagged=100.0% [detour_ratio>1.5]
+- M2 Kajaran -> Vardanidzor: 35.67 km, detour=1.75, tagged=100.0% [detour_ratio>1.5]

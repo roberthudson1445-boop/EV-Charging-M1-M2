@@ -1,0 +1,103 @@
+{
+  "purpose": "Preliminary financial screening sensitivity using directed-network MILP CAPEX; not a bankable financial model.",
+  "capex_basis": {
+    "source_root": "data\\derived\\case_study_screening_milp_directed_network\\scenario_runs",
+    "source_field": "total_capital_cost_proxy_usd",
+    "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+    "distance_direction": "demand_to_site",
+    "service_distance_km": 85.0,
+    "interstation_spacing_km": 85.0,
+    "interstation_spacing_method": "route_chainage",
+    "scenario_capex_and_layouts": {
+      "low": {
+        "directed_capex_proxy_usd": 1697400.0,
+        "opened_station_count": 6,
+        "charger_count": 7,
+        "achieved_mip_rel_gap": 0.0009364677198486177,
+        "directed_milp_summary_file": "data\\derived\\case_study_screening_milp_directed_network\\scenario_runs\\low\\milp_scenario_summary.csv",
+        "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+        "distance_direction": "demand_to_site"
+      },
+      "base": {
+        "directed_capex_proxy_usd": 3034000.0,
+        "opened_station_count": 7,
+        "charger_count": 15,
+        "achieved_mip_rel_gap": 0.0006690666765850087,
+        "directed_milp_summary_file": "data\\derived\\case_study_screening_milp_directed_network\\scenario_runs\\base\\milp_scenario_summary.csv",
+        "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+        "distance_direction": "demand_to_site"
+      },
+      "high": {
+        "directed_capex_proxy_usd": 8791800.0,
+        "opened_station_count": 12,
+        "charger_count": 49,
+        "achieved_mip_rel_gap": 0.000881465831317981,
+        "directed_milp_summary_file": "data\\derived\\case_study_screening_milp_directed_network\\scenario_runs\\high\\milp_scenario_summary.csv",
+        "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+        "distance_direction": "demand_to_site"
+      },
+      "armstat_ev_share_2_92": {
+        "directed_capex_proxy_usd": 3342400.0,
+        "opened_station_count": 7,
+        "charger_count": 17,
+        "achieved_mip_rel_gap": 0.000977272990487331,
+        "directed_milp_summary_file": "data\\derived\\case_study_screening_milp_directed_network\\scenario_runs\\armstat_ev_share_2_92\\milp_scenario_summary.csv",
+        "distance_method": "DIRECTED_OSM_SHORTEST_PATH_WITH_VIRTUAL_EDGE_NODES",
+        "distance_direction": "demand_to_site"
+      }
+    },
+    "note": "Directed-network CAPEX proxies are used; legacy chainage-distance CAPEX is not used."
+  },
+  "selected_energy_case": {
+    "retail_price_case": "DC_midpoint_sensitivity",
+    "retail_price_amd_per_kwh": 205.0,
+    "purchase_tariff_case": "ENA_6_10kV_day_reference",
+    "purchase_tariff_amd_per_kwh": 50.48,
+    "energy_loss_case": "loss_5pct_assumption",
+    "energy_loss_fraction": 0.05,
+    "source_file": "data\\derived\\operating_economics_sensitivity\\operating_economics_sensitivity.csv",
+    "interpretation": "Existing scenario energy contribution is retained; only the MILP CAPEX basis has been updated."
+  },
+  "fx": {
+    "amd_per_usd": 360.41,
+    "date": "2026-11-18",
+    "source": "Central Bank of Armenia official exchange-rate display; USD 1 = AMD 360.41",
+    "source_url": "https://www.cba.am/EN/",
+    "note": "One dated CBA reference rate is held constant for comparability; no FX forecast is made."
+  },
+  "financial_sensitivities": {
+    "demand_realization_factors": [
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
+    "fixed_om_percent_of_capex_per_year": [
+      2.0,
+      4.0,
+      6.0
+    ],
+    "discount_rates": [
+      0.08,
+      0.1,
+      0.12
+    ],
+    "project_lives_years": [
+      10,
+      15,
+      20
+    ],
+    "case_count": 432,
+    "break_even_case_count": 108
+  },
+  "excluded_or_unverified": [
+    "Full-corridor demand; represented demand remains three traffic locations/subsections only.",
+    "VAT normalization between retail revenue and ENA electricity tariff.",
+    "Income tax, VAT settlement, financing, working capital and depreciation.",
+    "Land, grid connection/upgrades, civil works beyond the current CAPEX proxy.",
+    "Maintenance, staffing, insurance, software, payment fees, demand charges and downtime; fixed O&M percentage is a sensitivity assumption only.",
+    "Charger replacement, residual value, inflation, demand growth and FX changes.",
+    "Site access/buildability and confirmed utility capacity; road-edge proximity does not establish legal driveway access."
+  ],
+  "interpretation": "NPV, IRR and payback are screening indicators under explicit analyst assumptions. They must not be described as verified project profitability, bankable returns, or a final investment decision."
+}

@@ -1,0 +1,3 @@
+﻿route_id,waypoint_count,legs_total,legs_completed,legs_failed,route_distance_km,tagged_route_km,untagged_connector_km,other_M_route_km,tagged_share,status
+M1,18,17,17,0,187.49785800000052,181.4461940000003,6.051664,0.0,0.9677240899466691,COMPLETE
+M2,26,25,25,0,367.5654060000011,366.8380539999993,0.727352,0.0,0.9980211630688613,COMPLETE
