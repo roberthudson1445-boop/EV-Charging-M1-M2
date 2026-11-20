@@ -178,6 +178,22 @@ The complete directed-network results package is stored in [`results/final_case_
 
 Raw OpenStreetMap PBF files and the full country-scale graph are large local inputs and are not included in the results package. The preserved scenario input snapshots allow inspection of the final case-study inputs without committing those large files.
 
+## Interactive map
+
+A browser-based interactive companion map is included in [`docs/interactive_map/`](docs/interactive_map/). It displays the selected candidate charging sites for the Low, Base, High, and Armstat scenarios. Select a scenario and click a station marker to inspect its corridor, chainage, charger count, installed power, and assigned daily demand.
+
+### Run locally on Windows
+
+1. Open the repository folder in File Explorer.
+2. Open `docs\interactive_map\`.
+3. Double-click `Open_Map.bat`.
+4. Keep the minimized local Python server window open while using the map.
+
+Python 3 and an internet connection are required. The internet connection loads the Leaflet library and OpenStreetMap background tiles. Do not open the HTML file directly with a `file://` address; use the batch launcher so the map runs through `http://127.0.0.1:8765`.
+
+**Interpretation:** Map markers represent optimized candidate locations, not approved or operating charging stations. The visualization covers the three documented demand scopes only; site access, land availability, grid connections, and local costs remain unverified. The static corridor figure in the thesis and presentation is retained for printing, while this HTML companion provides interactive scenario selection.
+
+
 ## 10. Setup and tests (Windows)
 
 From Command Prompt in the repository root:
@@ -217,7 +233,8 @@ EV-Charging-M1-M2/
 │   ├── reference/           # traffic and reference evidence
 │   └── derived/             # generated local inputs and intermediate outputs
 ├── docs/                    # technical reference and data-source notes
-│   └── history/             # archived notes from earlier development stages
+│   ├── history/             # archived notes from earlier development stages
+│   └── interactive_map/     # interactive scenario map and local launcher
 ├── results/
 │   └── final_case_study_screening_directed/
 │       ├── scenarios/
