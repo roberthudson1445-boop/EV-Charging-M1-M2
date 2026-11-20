@@ -180,6 +180,7 @@ Raw OpenStreetMap PBF files and the full country-scale graph are large local inp
 
 ## Interactive map
 
+[🌐 Open the Live Interactive Map](https://roberthudson1445-boop.github.io/EV-Charging-M1-M2/docs/interactive_map/EV_Charging_M1_M2_Interactive_Map.html)
 A browser-based interactive companion map is included in [`docs/interactive_map/`](docs/interactive_map/). It displays the selected candidate charging sites for the Low, Base, High, and Armstat scenarios. Select a scenario and click a station marker to inspect its corridor, chainage, charger count, installed power, and assigned daily demand.
 
 ### Run locally on Windows
